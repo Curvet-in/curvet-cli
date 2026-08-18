@@ -11,6 +11,8 @@ export interface ProfileConfig {
 
 export interface CliConfig {
   defaultProfile?: string;
+  /** Show the per-request cost line on stderr. Defaults to true. */
+  showCost?: boolean;
   profiles: Record<string, ProfileConfig>;
 }
 
@@ -51,7 +53,26 @@ export async function loadConfig(): Promise<CliConfig> {
     throw new Error(`${configPath()} is not valid JSON — fix or delete it and run \`curvet auth login\` again.`);
   }
   const cfg = parsed as CliConfig;
-  return { defaultProfile: cfg.defaultProfile, profiles: cfg.profiles ?? {} };
+  return {
+    defaultProfile: cfg.defaultProfile,
+    showCost: cfg.showCost,
+    profiles: cfg.profiles ?? {},
+  };
+}
+
+/**
+ * Should the cost line be printed? Shown by default — including when stderr is
+ * not a TTY, so piped runs still record what they spent.
+ *
+ * Precedence: --no-cost flag > CURVET_NO_COST env > config `showCost` > true.
+ * The env var is the CI/CD lever: one variable silences every invocation
+ * without touching the command lines or a config file in the image.
+ */
+export function resolveShowCost(config: CliConfig, flag?: boolean): boolean {
+  if (flag === false) return false;
+  if (flag === true) return true;
+  if (/^(1|true|yes)$/i.test(String(process.env.CURVET_NO_COST ?? ""))) return false;
+  return config.showCost ?? true;
 }
 
 export async function saveConfig(config: CliConfig): Promise<void> {

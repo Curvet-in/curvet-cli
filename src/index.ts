@@ -5,6 +5,7 @@ import { authCommand } from "./commands/auth.js";
 import { modelsCommand } from "./commands/models.js";
 import { chatCommand } from "./commands/chat.js";
 import { balanceCommand } from "./commands/balance.js";
+import { configCommand } from "./commands/config.js";
 import { doctorCommand } from "./commands/doctor.js";
 
 const pkg = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -19,6 +20,7 @@ program.addCommand(authCommand());
 program.addCommand(modelsCommand());
 program.addCommand(chatCommand());
 program.addCommand(balanceCommand());
+program.addCommand(configCommand());
 program.addCommand(doctorCommand());
 
 program.parseAsync(process.argv).catch((err) => {

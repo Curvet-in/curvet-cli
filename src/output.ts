@@ -32,6 +32,44 @@ export function table(headers: string[], rows: string[][]): string {
   return out.join("\n");
 }
 
+/** What a single request cost, normalized across the streaming and sync paths. */
+export interface CostInfo {
+  model?: string;
+  credits?: number;
+  /** Which scheme actually charged: token-metered, or the flat per-model credit. */
+  billing?: "metered" | "flat";
+  tokensIn?: number;
+  tokensOut?: number;
+  remainingBalance?: number;
+  latencyMs?: number;
+}
+
+function compactTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+function compactDuration(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+/** One-line cost summary, e.g. `— gpt-4o · 12 credits (metered) · 1.2k in / 340 out · 2.1s`. */
+export function formatCost(info: CostInfo): string {
+  const parts: string[] = [];
+  if (info.model) parts.push(info.model);
+  if (info.credits != null) {
+    const unit = info.credits === 1 ? "credit" : "credits";
+    parts.push(
+      info.billing ? `${info.credits} ${unit} (${info.billing})` : `${info.credits} ${unit}`,
+    );
+  }
+  if (info.tokensIn != null || info.tokensOut != null) {
+    parts.push(`${compactTokens(info.tokensIn ?? 0)} in / ${compactTokens(info.tokensOut ?? 0)} out`);
+  }
+  if (info.remainingBalance != null) parts.push(`${info.remainingBalance} left`);
+  if (info.latencyMs != null) parts.push(compactDuration(info.latencyMs));
+  return `— ${parts.join(" · ")}`;
+}
+
 export function ok(msg: string): string {
   return `${pc.green("✔")} ${msg}`;
 }

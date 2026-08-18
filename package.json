@@ -1,6 +1,6 @@
 {
   "name": "@curvet/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Curvet in your terminal — chat, models, balance, and diagnostics for the Curvet Unified Playground API.",
   "type": "module",
   "bin": {
