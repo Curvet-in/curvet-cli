@@ -48,6 +48,15 @@ function compactTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
+/**
+ * Credit arithmetic is floating point server-side, so a balance can arrive as
+ * 44.44359999999997. Round to the smallest unit anyone bills in and drop the
+ * noise rather than printing it back at the user.
+ */
+export function trimNumber(n: number): string {
+  return String(Math.round(n * 10_000) / 10_000);
+}
+
 function compactDuration(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 }
@@ -58,14 +67,13 @@ export function formatCost(info: CostInfo): string {
   if (info.model) parts.push(info.model);
   if (info.credits != null) {
     const unit = info.credits === 1 ? "credit" : "credits";
-    parts.push(
-      info.billing ? `${info.credits} ${unit} (${info.billing})` : `${info.credits} ${unit}`,
-    );
+    const credits = trimNumber(info.credits);
+    parts.push(info.billing ? `${credits} ${unit} (${info.billing})` : `${credits} ${unit}`);
   }
   if (info.tokensIn != null || info.tokensOut != null) {
     parts.push(`${compactTokens(info.tokensIn ?? 0)} in / ${compactTokens(info.tokensOut ?? 0)} out`);
   }
-  if (info.remainingBalance != null) parts.push(`${info.remainingBalance} left`);
+  if (info.remainingBalance != null) parts.push(`${trimNumber(info.remainingBalance)} left`);
   if (info.latencyMs != null) parts.push(compactDuration(info.latencyMs));
   return `— ${parts.join(" · ")}`;
 }

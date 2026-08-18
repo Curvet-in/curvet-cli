@@ -32,6 +32,11 @@ switch between accounts or environments.
 |---|---|
 | `curvet models [--type chat] [--cheapest]` | List models; keyless via the public catalogue, per-app (with rate limits) once logged in |
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
+| `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
+| `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
+| `curvet jobs get\|wait <jobId>` | Inspect or poll an async job; `wait -o file` downloads the result |
+| `curvet workflows run <id>` | Run a workflow with `-i key=value` and `-f field=./file`; `status <runId>` to check one |
+| `curvet analytics [--start] [--end]` | Requests, cost, and latency broken down by model, category, and status |
 | `curvet balance [--watch]` | Credit balance breakdown; `--watch` polls and shows burn rate |
 | `curvet auth login\|status\|use` | Manage profiles and credentials |
 | `curvet config list\|get\|set\|unset` | Read and write CLI settings |
@@ -70,9 +75,26 @@ curvet config set showCost false    # persistently
 
 `--cost` forces it back on for a single call.
 
+## Long-running jobs
+
+Video, audio, 3D, and workflow runs poll to completion with a progress bar on a
+terminal. Off-TTY the bar degrades to one line per 10% so CI logs stay readable,
+and `--quiet` removes it entirely. Progress goes to stderr; results go to stdout.
+
+```bash
+curvet video "a paper plane over a city" -o clip.mp4      # wait, with progress
+JOB=$(curvet video "..." --no-wait)                       # returns immediately
+curvet jobs wait "$JOB" -o clip.mp4                       # attach later
+```
+
+Workflow inputs are parsed as JSON when they can be, so types survive:
+
+```bash
+curvet workflows run wf_123 -i topic=otters -i count=3 -i draft=true -f doc=./brief.pdf
+```
+
 ## Roadmap
 
-- `curvet video|audio|3d` with live progress bars, `curvet jobs`, `curvet workflows`
 - `curvet ent` — invites, members, credits, pool access
 - `curvet init <opencode|cline|zed|copilot>` — point your coding tool at Curvet
 - `curvet proxy` — local OpenAI-compatible proxy

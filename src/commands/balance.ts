@@ -3,37 +3,39 @@ import pc from "picocolors";
 import type { BalanceInfo } from "@curvet/sdk";
 import { resolveProfile } from "../config.js";
 import { makeClient, requireAppKey } from "../client.js";
-import { printJson } from "../output.js";
+import { printJson, trimNumber } from "../output.js";
 
 function renderBalance(info: BalanceInfo): string {
   const lines: string[] = [];
-  lines.push(`${pc.bold("Available:")} $${info.totalAvailableUSD}`);
+  lines.push(`${pc.bold("Available:")} $${trimNumber(info.totalAvailableUSD)}`);
   const b = info.breakdown;
   if (b) {
-    if (b.walletCredits != null) lines.push(`  personal credits   ${b.walletCredits}`);
+    if (b.walletCredits != null)
+      lines.push(`  personal credits   ${trimNumber(b.walletCredits)}`);
     if (b.isEnterprise) {
       if (b.enterpriseCredits != null)
         lines.push(
-          `  company allotment  ${b.enterpriseCredits}` +
+          `  company allotment  ${trimNumber(b.enterpriseCredits)}` +
             (b.enterpriseSpendable != null && b.enterpriseSpendable !== b.enterpriseCredits
-              ? pc.dim(` (${b.enterpriseSpendable} spendable under cap)`)
+              ? pc.dim(` (${trimNumber(b.enterpriseSpendable)} spendable under cap)`)
               : ""),
         );
       if (b.drawsFromPool && b.orgPoolCredits != null)
         lines.push(
-          `  org pool           ${b.orgPoolCredits}` +
+          `  org pool           ${trimNumber(b.orgPoolCredits)}` +
             (b.orgPoolSpendable != null && b.orgPoolSpendable !== b.orgPoolCredits
-              ? pc.dim(` (${b.orgPoolSpendable} spendable under cap)`)
+              ? pc.dim(` (${trimNumber(b.orgPoolSpendable)} spendable under cap)`)
               : ""),
         );
       if (b.monthlyUsed != null)
         lines.push(
-          `  used this month    ${b.monthlyUsed}` +
-            (b.organizationLimit ? pc.dim(` / ${b.organizationLimit} cap`) : ""),
+          `  used this month    ${trimNumber(b.monthlyUsed)}` +
+            (b.organizationLimit ? pc.dim(` / ${trimNumber(b.organizationLimit)} cap`) : ""),
         );
     }
   }
-  if (info.totalPoints != null) lines.push(pc.dim(`  points             ${info.totalPoints}`));
+  if (info.totalPoints != null)
+    lines.push(pc.dim(`  points             ${trimNumber(info.totalPoints)}`));
   return lines.join("\n");
 }
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Command } from "commander";
-import { formatCost } from "../src/output.js";
+import { formatCost, trimNumber } from "../src/output.js";
 import { resolveShowCost, type CliConfig } from "../src/config.js";
 
 describe("--no-cost flag detection", () => {
@@ -66,6 +66,23 @@ describe("formatCost", () => {
 
   it("includes the remaining balance when present", () => {
     expect(formatCost({ model: "m", credits: 2, remainingBalance: 892 })).toContain("892 left");
+  });
+
+  it("strips floating-point noise from credits and balance", () => {
+    const line = formatCost({ model: "m", credits: 0.30000000000000004, remainingBalance: 44.44359999999997 });
+    expect(line).toContain("0.3 credits");
+    expect(line).toContain("44.4436 left");
+  });
+});
+
+describe("trimNumber", () => {
+  it("leaves clean numbers alone", () => {
+    expect(trimNumber(892)).toBe("892");
+    expect(trimNumber(0.05)).toBe("0.05");
+  });
+  it("rounds away representation noise", () => {
+    expect(trimNumber(44.44359999999997)).toBe("44.4436");
+    expect(trimNumber(0.1 + 0.2)).toBe("0.3");
   });
 });
 

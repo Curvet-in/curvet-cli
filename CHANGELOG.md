@@ -2,6 +2,25 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.2.0
+
+Media generation, async jobs, workflows, and analytics.
+
+- `curvet image` — generate an image; `-o` downloads it, otherwise the URL is printed.
+- `curvet video|audio|3d` — async generation that polls to completion with a
+  progress bar, `-o` to download, and `--no-wait` to get the job id instead.
+- `curvet jobs get|wait <jobId>` — inspect or attach to an async job later.
+- `curvet workflows run|status` — run a workflow with repeatable `-i key=value`
+  inputs (parsed as JSON when possible, so numbers/booleans/arrays survive) and
+  `-f field=./path` file uploads. Polls with per-node progress.
+- `curvet analytics` — requests, cost, average latency, and breakdowns by model,
+  category, and status. Reads the live payload shape (`overview`/`modelBreakdown`),
+  which is richer than the SDK's declared `AnalyticsResult`.
+- Progress bars render in place on a TTY and degrade to one line per 10% off-TTY,
+  so CI logs stay readable. `--quiet` disables them; progress goes to stderr.
+- Credit figures are rounded to 4 decimal places, so a balance no longer prints
+  as `44.44359999999997`.
+
 ## 0.1.1
 
 Fixed: streaming chat reported no cost at all.

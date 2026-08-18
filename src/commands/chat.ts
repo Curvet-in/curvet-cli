@@ -3,25 +3,9 @@ import pc from "picocolors";
 import type { ChatMessage } from "@curvet/sdk";
 import { resolveProfile, loadConfig, resolveShowCost, type ResolvedProfile } from "../config.js";
 import { makeClient, requireAppKey, v1Root } from "../client.js";
-import { fail, printJson, formatCost, type CostInfo } from "../output.js";
-
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-/** Pick a model: --model flag > profile default > first chat model in the catalogue. */
-async function resolveModel(profile: ResolvedProfile, flag?: string): Promise<string> {
-  if (flag) return flag;
-  if (profile.defaultModel) return profile.defaultModel;
-  const client = makeClient(profile);
-  const chatModels = await client.models.list({ type: "chat" });
-  if (chatModels.length === 0) {
-    throw new Error("No chat models available for this app — pass --model explicitly.");
-  }
-  return chatModels[0].id;
-}
+import { pickModel } from "../models.js";
+import { costFlagFrom, readPrompt } from "./shared.js";
+import { printJson, formatCost, type CostInfo } from "../output.js";
 
 /**
  * Stream via the OpenAI-compatible endpoint (POST {v1}/chat/completions, SSE).
@@ -127,28 +111,16 @@ export function chatCommand(): Command {
       const profile = await resolveProfile(cmd.optsWithGlobals().profile);
       requireAppKey(profile);
       const config = await loadConfig();
-      // Commander defaults `cost` to true for a `--no-cost` option, so the value
-      // alone cannot tell "flag omitted" from "flag given". Only treat it as an
-      // explicit choice when it actually came from the command line — otherwise
-      // it would mask CURVET_NO_COST and the stored setting.
-      const costFlag =
-        cmd.getOptionValueSource("cost") === "cli" ? (opts.cost as boolean) : undefined;
       // Suppressed for --json too: the usage object is already in stdout there.
-      const showCost = resolveShowCost(config, costFlag) && !opts.json;
+      const showCost = resolveShowCost(config, costFlagFrom(cmd)) && !opts.json;
 
-      const argPrompt = promptWords.join(" ").trim();
-      const piped = process.stdin.isTTY ? "" : (await readStdin()).trim();
-      const prompt = [argPrompt, piped].filter(Boolean).join("\n\n");
-      if (!prompt) {
-        console.error(fail("No prompt. Pass one as an argument or pipe text in."));
-        process.exit(1);
-      }
+      const prompt = await readPrompt(promptWords);
 
       const messages: ChatMessage[] = [];
       if (opts.system) messages.push({ role: "system", content: opts.system });
       messages.push({ role: "user", content: prompt });
 
-      const model = await resolveModel(profile, opts.model);
+      const model = await pickModel(profile, opts.model, "chat");
       const wantStream = opts.stream !== false && !opts.json;
 
       if (wantStream) {
