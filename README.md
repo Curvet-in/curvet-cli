@@ -35,6 +35,8 @@ switch between accounts or environments.
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
 | `curvet jobs get\|wait <jobId>` | Inspect or poll an async job; `wait -o file` downloads the result |
+| `curvet workflows list` | The workflows this key can run; `-q` search, `-n` limit |
+| `curvet workflows show <id>` | One workflow and the inputs it accepts, with a ready-to-run command |
 | `curvet workflows run <id>` | Run a workflow with `-i key=value` and `-f field=./file`; `status <runId>` to check one |
 | `curvet analytics [--start] [--end]` | Requests, cost, and latency broken down by model, category, and status |
 | `curvet balance [--watch]` | Credit balance breakdown; `--watch` polls and shows burn rate |
@@ -85,6 +87,19 @@ and `--quiet` removes it entirely. Progress goes to stderr; results go to stdout
 curvet video "a paper plane over a city" -o clip.mp4      # wait, with progress
 JOB=$(curvet video "..." --no-wait)                       # returns immediately
 curvet jobs wait "$JOB" -o clip.mp4                       # attach later
+```
+
+Find a workflow and learn its inputs without opening the builder — `show` prints
+the run command with the input flags already filled in:
+
+```bash
+curvet workflows list -q digest
+curvet workflows show 6a7b6760e6c28f717dba4ec6
+# INPUTS
+# NAME        TYPE   REQUIRED  ALSO ACCEPTS
+# Transcribe  audio  yes       url, audioUrl
+#
+# run it with: curvet workflows run 6a7b… -i Transcribe=<value>
 ```
 
 Workflow inputs are parsed as JSON when they can be, so types survive:

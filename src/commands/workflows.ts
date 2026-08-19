@@ -2,11 +2,11 @@ import { Command } from "commander";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import pc from "picocolors";
-import type { WorkflowRun } from "@curvet/sdk";
+import type { WorkflowRun, WorkflowSummary, WorkflowDetail } from "@curvet/sdk";
 import { resolveProfile } from "../config.js";
 import { makeClient, requireAppKey } from "../client.js";
 import { Progress } from "../progress.js";
-import { printJson, table, ok, fail } from "../output.js";
+import { printJson, table, ok, fail, warn } from "../output.js";
 
 /**
  * Parse `--input key=value`. Values are tried as JSON first so numbers, booleans,
@@ -86,13 +86,120 @@ function printRun(run: WorkflowRun): void {
   console.log(table(["FIELD", "VALUE"], rows));
 }
 
+/** Compact relative age, so a listing reads at a glance. */
+export function relativeAge(iso?: string, now: number = Date.now()): string {
+  if (!iso) return "—";
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "—";
+  const mins = Math.max(0, Math.round((now - then) / 60000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days < 30) return `${days}d ago`;
+  return `${Math.round(days / 30)}mo ago`;
+}
+
+function printWorkflowList(workflows: WorkflowSummary[]): void {
+  console.log(
+    table(
+      ["ID", "TITLE", "NODES", "UPDATED"],
+      workflows.map((w) => [w.id, w.title, String(w.nodeCount), relativeAge(w.updatedAt)]),
+    ),
+  );
+}
+
+function printWorkflowDetail(wf: WorkflowDetail): void {
+  const rows: string[][] = [
+    ["id", wf.id],
+    ["title", wf.title],
+  ];
+  if (wf.description) rows.push(["description", wf.description]);
+  rows.push(["nodes", String(wf.nodeCount)]);
+  if (wf.tags?.length) rows.push(["tags", wf.tags.join(", ")]);
+  if (wf.status) rows.push(["status", wf.status]);
+  if (wf.updatedAt) rows.push(["updated", relativeAge(wf.updatedAt)]);
+  console.log(table(["FIELD", "VALUE"], rows));
+
+  console.log(`\n${pc.bold("INPUTS")}`);
+  if (!wf.inputs || wf.inputs.length === 0) {
+    console.log(pc.dim("  none — this workflow takes no run inputs"));
+    return;
+  }
+  console.log(
+    table(
+      ["NAME", "TYPE", "REQUIRED", "ALSO ACCEPTS"],
+      wf.inputs.map((i) => [
+        i.name,
+        String(i.type),
+        i.required ? pc.yellow("yes") : "no",
+        (i.aliases ?? []).join(", "),
+      ]),
+    ),
+  );
+  // The whole point of the command: turn the answer into the next command.
+  const example = wf.inputs.map((i) => `-i ${i.name}=<value>`).join(" ");
+  console.log(pc.dim(`\nrun it with: curvet workflows run ${wf.id} ${example}`));
+}
+
 /** Internals exposed for unit tests. */
-export const __test = { parseInputs, describeNode };
+export const __test = { parseInputs, describeNode, relativeAge };
 
 export function workflowsCommand(): Command {
   const workflows = new Command("workflows")
     .alias("wf")
     .description("Run workflows and inspect their runs");
+
+  workflows
+    .command("list")
+    .alias("ls")
+    .description("List the workflows this key can run")
+    .option("-q, --query <text>", "filter by title (case-insensitive)")
+    .option("-n, --limit <n>", "max results (1-100, default 50)", (v) => parseInt(v, 10))
+    .option("--json", "machine-readable output")
+    .action(async (opts, cmd) => {
+      const profile = await resolveProfile(cmd.optsWithGlobals().profile);
+      requireAppKey(profile);
+      const workflowList = await makeClient(profile).workflows.list({
+        limit: opts.limit,
+        q: opts.query,
+      });
+
+      if (opts.json) {
+        printJson(workflowList);
+        return;
+      }
+      if (workflowList.length === 0) {
+        console.log(
+          warn(
+            opts.query
+              ? `No workflows matching "${opts.query}".`
+              : "No workflows yet — build one in the visual builder.",
+          ),
+        );
+        return;
+      }
+      printWorkflowList(workflowList);
+      process.stderr.write(
+        pc.dim(`\nsee a workflow's inputs with: curvet workflows show <id>\n`),
+      );
+    });
+
+  workflows
+    .command("show <workflowId>")
+    .description("Show one workflow and the inputs it accepts")
+    .option("--json", "machine-readable output")
+    .action(async (workflowId: string, opts, cmd) => {
+      const profile = await resolveProfile(cmd.optsWithGlobals().profile);
+      requireAppKey(profile);
+      const wf = await makeClient(profile).workflows.retrieve(workflowId);
+
+      if (opts.json) {
+        printJson(wf);
+        return;
+      }
+      printWorkflowDetail(wf);
+    });
 
   workflows
     .command("run <workflowId>")

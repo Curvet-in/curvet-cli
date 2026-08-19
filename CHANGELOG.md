@@ -2,6 +2,19 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.3.0
+
+Workflow discovery — you no longer need the web builder to use workflows.
+
+- `curvet workflows list` (alias `ls`) — the workflows this key can run, newest
+  first, with `-q` title search and `-n` limit.
+- `curvet workflows show <id>` — one workflow plus **the inputs it accepts**,
+  each with its type, whether it is required, and the alias keys also accepted.
+  Ends by printing the exact `curvet workflows run ...` command with the input
+  flags filled in.
+
+Requires `@curvet/sdk` >= 0.6.0 and the darkapp-haven backend >= 0.51.11.
+
 ## 0.2.0
 
 Media generation, async jobs, workflows, and analytics.

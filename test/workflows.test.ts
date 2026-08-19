@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { __test } from "../src/commands/workflows.js";
 
-const { parseInputs, describeNode } = __test;
+const { parseInputs, describeNode, relativeAge } = __test;
 
 describe("parseInputs", () => {
   it("keeps a plain string as a string", () => {
@@ -52,5 +52,26 @@ describe("describeNode", () => {
 
   it("returns undefined when there is nothing to say", () => {
     expect(describeNode(base)).toBeUndefined();
+  });
+});
+
+describe("relativeAge", () => {
+  const now = Date.parse("2026-08-19T12:00:00Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("renders minutes, hours, days and months", () => {
+    expect(relativeAge(ago(5 * 60_000), now)).toBe("5m ago");
+    expect(relativeAge(ago(3 * 3_600_000), now)).toBe("3h ago");
+    expect(relativeAge(ago(4 * 86_400_000), now)).toBe("4d ago");
+    expect(relativeAge(ago(90 * 86_400_000), now)).toBe("3mo ago");
+  });
+
+  it("never renders a negative age for a clock-skewed future date", () => {
+    expect(relativeAge(new Date(now + 60_000).toISOString(), now)).toBe("0m ago");
+  });
+
+  it("falls back for missing or unparseable timestamps", () => {
+    expect(relativeAge(undefined, now)).toBe("—");
+    expect(relativeAge("not a date", now)).toBe("—");
   });
 });
