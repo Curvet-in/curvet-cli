@@ -8,7 +8,7 @@ One release covering three things: the distribution commands that let other
 tools run on Curvet, enterprise administration, and a model-capability fix that
 closes a live footgun.
 
-Requires `@curvet/sdk` >= 0.7.0.
+Requires `@curvet/sdk` >= 0.8.0.
 
 ### Distribution — get Curvet into the tools people already use
 
