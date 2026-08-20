@@ -4,39 +4,6 @@ import { resolveProfile } from "../config.js";
 import { makeClient, requireAppKey } from "../client.js";
 import { printJson, table, warn } from "../output.js";
 
-/**
- * The live `/analytics` payload, which is richer than the SDK's declared
- * `AnalyticsResult`: aggregate rows keyed by `_id`, plus per-model cost and
- * latency. The SDK type describes a flatter, older shape, so read the real keys
- * here and fall back to the declared ones.
- */
-interface AggregateRow {
-  _id: string | null;
-  totalCost?: number;
-  requestCount?: number;
-  count?: number;
-  avgLatency?: number | null;
-  category?: string;
-}
-
-interface AnalyticsPayload {
-  overview?: {
-    totalCost?: number;
-    totalRequests?: number;
-    avgCostPerRequest?: number;
-    avgLatency?: number | null;
-  };
-  modelBreakdown?: AggregateRow[];
-  categoryBreakdown?: AggregateRow[];
-  statusBreakdown?: AggregateRow[];
-  errorBreakdown?: AggregateRow[];
-  // Older/flatter shape, still honoured if a deployment returns it.
-  totalRequests?: number;
-  totalCost?: number;
-  requestsByModel?: Record<string, number>;
-  requestsByCategory?: Record<string, number>;
-}
-
 /** Costs span several orders of magnitude, so keep small ones legible. */
 export function formatUsd(n: number): string {
   if (n === 0) return "$0";
@@ -64,10 +31,10 @@ export function analyticsCommand(): Command {
       const profile = await resolveProfile(cmd.optsWithGlobals().profile);
       requireAppKey(profile);
 
-      const result = (await makeClient(profile).analytics.get({
+      const result = await makeClient(profile).analytics.get({
         startDate: opts.start,
         endDate: opts.end,
-      })) as AnalyticsPayload;
+      });
 
       if (opts.json) {
         printJson(result);

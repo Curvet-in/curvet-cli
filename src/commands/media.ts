@@ -3,7 +3,7 @@ import pc from "picocolors";
 import type { Curvet, MediaParamsBase, MediaResource, ModelType } from "@curvet/sdk";
 import { resolveProfile } from "../config.js";
 import { makeClient, requireAppKey } from "../client.js";
-import { pickModel } from "../models.js";
+import { catalogueFor, pickModel } from "../models.js";
 import { Progress } from "../progress.js";
 import { downloadTo, extensionFor, formatBytes } from "../download.js";
 import { formatEta, readPrompt, writeMediaCost } from "./shared.js";
@@ -78,8 +78,15 @@ function buildCommand(spec: MediaSpec): Command {
     requireAppKey(profile);
 
     const prompt = await readPrompt(promptWords);
-    const model = await pickModel(profile, opts.model, spec.name as ModelType);
     const client = makeClient(profile);
+    // `audio` covers both directions in the catalogue, so ask for a generation
+    // model explicitly — otherwise `-m whisper-large-v3` submits a job that
+    // cannot succeed, and the default could drift onto a transcription model.
+    const model = await pickModel(catalogueFor(profile, client), {
+      flag: opts.model,
+      type: spec.name as ModelType,
+      capability: "generation",
+    });
     const resource = spec.resource(client);
     const params = compact({ model, prompt, ...(spec.params?.(opts) ?? {}) }) as MediaParamsBase;
 
