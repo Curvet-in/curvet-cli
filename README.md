@@ -30,19 +30,75 @@ switch between accounts or environments.
 
 | Command | What it does |
 |---|---|
-| `curvet models [--type chat] [--cheapest]` | List models; keyless via the public catalogue, per-app (with rate limits) once logged in |
+| `curvet models [--type chat] [--capability] [--include all]` | List models; keyless via the public catalogue, per-app (with rate limits) once logged in |
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
+| `curvet stt clip.mp3` | Transcribe audio; prints the text, `-o` writes it to a file |
 | `curvet jobs get\|wait <jobId>` | Inspect or poll an async job; `wait -o file` downloads the result |
 | `curvet workflows list` | The workflows this key can run; `-q` search, `-n` limit |
 | `curvet workflows show <id>` | One workflow and the inputs it accepts, with a ready-to-run command |
 | `curvet workflows run <id>` | Run a workflow with `-i key=value` and `-f field=./file`; `status <runId>` to check one |
 | `curvet analytics [--start] [--end]` | Requests, cost, and latency broken down by model, category, and status |
 | `curvet balance [--watch]` | Credit balance breakdown; `--watch` polls and shows burn rate |
+| `curvet ent overview\|invite\|members` | Enterprise admin: pool, invites, allotments, pool access (enterprise key) |
 | `curvet auth login\|status\|use` | Manage profiles and credentials |
 | `curvet config list\|get\|set\|unset` | Read and write CLI settings |
 | `curvet doctor` | Diagnose config, key scopes, connectivity, and headroom |
+| `curvet init <tool>` | Write a coding tool's config from the live model catalogue |
+| `curvet proxy` | Local OpenAI-compatible endpoint that injects your key |
+| `curvet mcp` | Run Curvet as an MCP server over stdio |
+
+### Picking a model
+
+`curvet models` lists only what your key can actually call. Each model also says
+what it *does*, which matters most for audio: `type: audio` covers both
+directions, so a speech-to-text model sits in the same list as a text-to-speech
+one.
+
+```console
+$ curvet models --type audio
+MODEL                 TYPE   CAPABILITY     PROVIDER    CREDITS  VISION
+────────────────────  ─────  ─────────────  ──────────  ───────  ──────
+ali-qwen3-tts-flash   audio  generation     dashscope   1
+ali-qwen3-asr-flash   audio  transcription  dashscope   1
+elevenlabs-scribe     audio  transcription  elevenlabs  2
+whisper-large-v3      audio  transcription  deepinfra   1
+```
+
+Filter by it with `--capability generation` or `--capability transcription`, and
+see what's coming with `--include all`, which adds a STATUS column marking
+coming-soon and dashboard-only models.
+
+Naming the wrong one is caught before the request is made, rather than after you
+have paid for it:
+
+```console
+$ curvet audio -m whisper-large-v3 "hello there"
+✘ whisper-large-v3 is a speech-to-text model — it transcribes audio rather than generating it.
+  Use `curvet stt <file> -m whisper-large-v3` instead.
+  List the right ones with `curvet models --capability generation`.
+```
+
+### Speech to text
+
+```bash
+curvet stt meeting.m4a                      # transcript on stdout
+curvet stt call.wav -m elevenlabs-scribe    # choose the engine
+curvet stt clip.mp3 --language en --prompt "Curvet, appKey, DeepInfra"
+curvet stt clip.mp3 -o transcript.txt
+curvet stt clip.mp3 --json | jq -r .text
+```
+
+Without `-m` the gateway picks its own engine. `--allow-fallback` lets it retry
+elsewhere if the first provider is down, and the CLI says so when it does:
+
+```console
+$ curvet stt clip.mp3 -m whisper-large-v3 --allow-fallback
+! deepinfra was unavailable — transcribed with elevenlabs.
+The quick brown fox jumps over the lazy dog.
+— whisper-large-v3 · 1 credit · 2522.32 left
+```
 
 ### Pipes are first-class
 
@@ -50,6 +106,7 @@ switch between accounts or environments.
 cat error.log | curvet chat "explain this stack trace"
 git diff | curvet chat "review this change" -m claude-sonnet-4-6
 curvet chat --json "hello" | jq .usage.credits
+curvet stt interview.mp3 | curvet chat "summarise this transcript in five bullets"
 ```
 
 ## Cost reporting
@@ -108,11 +165,136 @@ Workflow inputs are parsed as JSON when they can be, so types survive:
 curvet workflows run wf_123 -i topic=otters -i count=3 -i draft=true -f doc=./brief.pdf
 ```
 
+## Point your tools at Curvet
+
+### `curvet init` — write a coding tool's config
+
+```bash
+curvet init                 # what each tool needs, and where it goes
+curvet init opencode        # writes ~/.config/opencode/opencode.json
+curvet init zed             # merges into ~/.config/zed/settings.json
+curvet init vscode          # VS Code Copilot Chat's chatLanguageModels.json
+curvet init cline           # prints the values to type into its settings UI
+```
+
+Everything is generated from the **live** `/v1/models`, because the two ways this
+goes wrong are both literals in a doc that the code can't keep true: a model id
+we don't serve (404 on every request), and a missing price block (OpenCode
+reporting `$0.00` for a 16,705-token session — the charge was real either way).
+
+Existing settings are merged, not replaced: only the `curvet` subtree is
+written, the previous file is saved as `.bak`, and a file with comments or
+trailing commas is **left alone** with the block printed for you to paste — a
+JSONC settings file can't be rewritten without destroying the comments.
+
+Your key never reaches stdout unless you ask: configs reference
+`{env:CURVET_APP_KEY}`, and the verification `curl` uses `$CURVET_APP_KEY`. Pass
+`--inline-key` to embed the real one. `--print` and `-o` are there when you'd
+rather place the file yourself, and `--prompt` emits a prompt for an AI
+assistant, with the real ids and rates as data.
+
+### `curvet proxy` — a local OpenAI endpoint that bills to Curvet
+
+```bash
+curvet proxy                 # http://127.0.0.1:4141/v1
+```
+
+Anything that speaks OpenAI now works, and never sees a key:
+
+```bash
+export OPENAI_BASE_URL=http://127.0.0.1:4141/v1
+export OPENAI_API_KEY=unused
+```
+
+```python
+client = OpenAI(base_url="http://127.0.0.1:4141/v1", api_key="unused")
+```
+
+Serves `/chat/completions` and `/models`, with or without the `/v1` prefix,
+since tools disagree about whether they append it. Streaming is piped through
+untouched, so tokens arrive as they're generated. The client's own
+`Authorization` header is dropped and replaced with yours.
+
+It binds to **loopback only**. `--host` widens that and says so loudly — every
+request the proxy accepts is billed to your account.
+
+### `curvet mcp` — Curvet as an MCP server
+
+```bash
+claude mcp add curvet -- curvet mcp
+```
+
+14 tools over stdio: `list_models`, `chat`, `generate_image`,
+`generate_video|audio|3d`, `get_job`, `transcribe_audio`, `list_workflows`,
+`describe_workflow`, `run_workflow`, `get_workflow_run`, `get_balance`,
+`get_analytics`.
+
+Media generation returns a `jobId` immediately and is polled with `get_job`,
+rather than holding a tool call open for minutes; pass `wait: true` if you'd
+rather block. Every result carries what it cost, and every tool description says
+whether it spends credits — an agent driving this can see its own spend.
+
+## Enterprise
+
+Needs an **enterprise key** (`cvent_ent_…`), not an app key — save one with
+`curvet auth login` or set `CURVET_ENTERPRISE_KEY`.
+
+```bash
+curvet ent overview                                  # pool, seats, per-member usage
+curvet ent members list
+curvet ent members set-credits ava@acme.com 1000     # negative reclaims to the pool
+curvet ent members set-limit ava@acme.com 0          # 0 = uncapped
+curvet ent members pool-access ava@acme.com on       # on | off | inherit
+curvet ent members set-role ava@acme.com admin
+curvet ent members remove ava@acme.com --yes
+```
+
+Members are keyed by Firebase UID in the API, so every command takes an **email**
+and resolves it for you. A raw UID works too — `--json` output contains them, so
+one command's output feeds the next. An address matching two members is an error
+rather than a guess.
+
+**Pool access is three states, not two.** `on` and `off` set it explicitly;
+`inherit` clears the setting so the role decides — admins draw the pool, plain
+members don't. Listings show what actually applies, marking the inherited case:
+
+```console
+$ curvet ent members list
+EMAIL           ROLE    ALLOTTED  USED  CAP       REMAINING  POOL            STATUS
+──────────────  ──────  ────────  ────  ────────  ─────────  ──────────────  ──────
+ava@acme.com    admin   0         120   uncapped  —          on (inherited)
+ben@acme.com    member  500       310   2000      1690       off (inherited)
+cleo@acme.com   member  0         840   5000      4160       on
+```
+
+### Bulk invites
+
+An invite token is shown **once** — only a hash is stored — so `bulk` writes each
+link to disk as it is created, before the next request goes out. A run that dies
+halfway has still saved everything it created.
+
+```bash
+curvet ent invite bulk ./team.csv --dry-run     # parse and check, create nothing
+curvet ent invite bulk ./team.csv               # → ./team-invites.csv
+```
+
+The CSV takes an optional header (columns in any order) or the positional layout
+`email,credits,role,limit,label`; blank lines and `#` comments are skipped, and
+only `email` is required:
+
+```csv
+# design team
+email,credits,role,limit,label
+ava@acme.com,1000,admin,0,Design lead
+ben@acme.com,500,member,2000,"Smith, Ben"
+cleo@acme.com
+```
+
+A row that fails is recorded in the output CSV with its reason and the run
+continues; the command exits non-zero if any failed.
+
 ## Roadmap
 
-- `curvet ent` — invites, members, credits, pool access
-- `curvet init <opencode|cline|zed|copilot>` — point your coding tool at Curvet
-- `curvet proxy` — local OpenAI-compatible proxy
 - `curvet login` — browser device flow for app management and key rotation
 
 ## Development

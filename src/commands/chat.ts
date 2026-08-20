@@ -3,7 +3,7 @@ import pc from "picocolors";
 import type { ChatMessage } from "@curvet/sdk";
 import { resolveProfile, loadConfig, resolveShowCost, type ResolvedProfile } from "../config.js";
 import { makeClient, requireAppKey, v1Root } from "../client.js";
-import { pickModel } from "../models.js";
+import { catalogueFor, pickModel } from "../models.js";
 import { costFlagFrom, readPrompt } from "./shared.js";
 import { printJson, formatCost, type CostInfo } from "../output.js";
 
@@ -120,7 +120,11 @@ export function chatCommand(): Command {
       if (opts.system) messages.push({ role: "system", content: opts.system });
       messages.push({ role: "user", content: prompt });
 
-      const model = await pickModel(profile, opts.model, "chat");
+      const model = await pickModel(catalogueFor(profile), {
+        flag: opts.model,
+        type: "chat",
+        defaultModel: profile.defaultModel,
+      });
       const wantStream = opts.stream !== false && !opts.json;
 
       if (wantStream) {

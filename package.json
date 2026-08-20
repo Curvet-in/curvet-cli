@@ -37,9 +37,11 @@
     "url": "git+https://github.com/Curvet-in/curvet-cli.git"
   },
   "dependencies": {
-    "@curvet/sdk": "^0.6.0",
+    "@curvet/sdk": "^0.7.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^12.1.0",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

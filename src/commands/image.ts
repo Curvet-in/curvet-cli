@@ -2,7 +2,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { resolveProfile, loadConfig, resolveShowCost } from "../config.js";
 import { makeClient, requireAppKey } from "../client.js";
-import { pickModel } from "../models.js";
+import { catalogueFor, pickModel } from "../models.js";
 import { downloadTo, formatBytes } from "../download.js";
 import { costFlagFrom, readPrompt } from "./shared.js";
 import { formatCost, printJson, ok } from "../output.js";
@@ -24,8 +24,11 @@ export function imageCommand(): Command {
       const showCost = resolveShowCost(config, costFlagFrom(cmd)) && !opts.json;
 
       const prompt = await readPrompt(promptWords);
-      const model = await pickModel(profile, opts.model, "image");
       const client = makeClient(profile);
+      const model = await pickModel(catalogueFor(profile, client), {
+        flag: opts.model,
+        type: "image",
+      });
 
       const res = await client.image.generate({ model, prompt, size: opts.size });
 

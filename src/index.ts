@@ -6,12 +6,17 @@ import { modelsCommand } from "./commands/models.js";
 import { chatCommand } from "./commands/chat.js";
 import { imageCommand } from "./commands/image.js";
 import { mediaCommands } from "./commands/media.js";
+import { sttCommand } from "./commands/stt.js";
 import { jobsCommand } from "./commands/jobs.js";
 import { workflowsCommand } from "./commands/workflows.js";
 import { analyticsCommand } from "./commands/analytics.js";
+import { entCommand } from "./commands/ent.js";
 import { balanceCommand } from "./commands/balance.js";
 import { configCommand } from "./commands/config.js";
 import { doctorCommand } from "./commands/doctor.js";
+import { initCommand } from "./commands/init.js";
+import { proxyCommand } from "./commands/proxy.js";
+import { mcpCommand } from "./commands/mcp.js";
 
 const pkg = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -26,12 +31,17 @@ program.addCommand(modelsCommand());
 program.addCommand(chatCommand());
 program.addCommand(imageCommand());
 for (const cmd of mediaCommands()) program.addCommand(cmd);
+program.addCommand(sttCommand());
 program.addCommand(jobsCommand());
 program.addCommand(workflowsCommand());
 program.addCommand(analyticsCommand());
+program.addCommand(entCommand());
 program.addCommand(balanceCommand());
 program.addCommand(configCommand());
 program.addCommand(doctorCommand());
+program.addCommand(initCommand());
+program.addCommand(proxyCommand());
+program.addCommand(mcpCommand());
 
 program.parseAsync(process.argv).catch((err) => {
   console.error(formatError(err));
