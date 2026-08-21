@@ -128,6 +128,22 @@ export async function classifyPath(cwd: string, request: string): Promise<Verdic
 }
 
 /**
+ * Does `--confirm-reads` need to ask about this one?
+ *
+ * Only for files that would otherwise pass SILENTLY. The other two verdicts
+ * already have their own handling and asking again is worse than not asking:
+ *
+ *   outside  has a better prompt of its own, naming the real destination. A
+ *            blanket "allow this read?" first, then "outside the project?"
+ *            second, is two differently-worded questions about one read — which
+ *            is how people learn to answer `y` without reading either.
+ *   deny     never asks. There is nothing to decide.
+ */
+export function needsBlanketConfirm(verdict: Verdict, confirmReads: boolean): boolean {
+  return confirmReads === true && verdict.decision === "allow";
+}
+
+/**
  * Human-readable one-liner for a denial, written for the model rather than the
  * user: it is what comes back as the tool's error, and it should tell the model
  * to stop asking rather than to try a variation.

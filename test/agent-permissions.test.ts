@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { classifyPath, secretReason, isInside } from "../src/agent/permissions.js";
+import { classifyPath, secretReason, isInside, needsBlanketConfirm } from "../src/agent/permissions.js";
 import { execute, type ToolContext } from "../src/agent/tools.js";
 
 /**
@@ -172,6 +172,32 @@ describe("classifyPath", () => {
     // A file that does not exist yet must still be judged, not waved through.
     expect((await classifyPath(root, "../elsewhere/missing.txt")).decision).toBe("confirm");
     expect((await classifyPath(root, "../elsewhere/.env")).decision).toBe("deny");
+  });
+});
+
+describe("needsBlanketConfirm", () => {
+  it("asks only about reads that would otherwise pass silently", async () => {
+    const inside = await classifyPath(root, "src/index.ts");
+    expect(needsBlanketConfirm(inside, true)).toBe(true);
+  });
+
+  it("does not double-ask about a file outside the project", async () => {
+    // The outside-project gate has its own prompt, and it is the better one — it
+    // names the real destination. Two differently-worded questions about one read
+    // is how people learn to answer `y` without reading either.
+    const outsideFile = await classifyPath(root, "../elsewhere/notes.md");
+    expect(outsideFile.decision).toBe("confirm");
+    expect(needsBlanketConfirm(outsideFile, true)).toBe(false);
+  });
+
+  it("never asks about something already denied", async () => {
+    const secret = await classifyPath(root, ".env");
+    expect(needsBlanketConfirm(secret, true)).toBe(false);
+  });
+
+  it("asks about nothing when the flag is off", async () => {
+    const inside = await classifyPath(root, "src/index.ts");
+    expect(needsBlanketConfirm(inside, false)).toBe(false);
   });
 });
 

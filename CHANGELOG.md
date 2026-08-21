@@ -27,6 +27,11 @@ All notable changes to `@curvet/cli` are documented here.
     delete` already follows.
   - `--confirm-reads` asks about files inside the directory too.
 
+  `--confirm-reads` asks only about reads that would otherwise pass silently.
+  Files outside the directory keep their own prompt, which is the better one —
+  it names the real destination — and asking both would be two differently
+  worded questions about one read.
+
 - **`curvet agent --log`** — what the agent has actually read on this machine,
   with the decision for each. Stored on your disk rather than the server.
 
