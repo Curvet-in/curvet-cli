@@ -2,6 +2,16 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.6.1
+
+- **`curvet agent` no longer prints the answer twice.** `run_end` carries the
+  run's final text in full, and it had just been streamed word for word. The
+  summary now appears only when nothing was streamed — a tool-only run, or
+  `--quiet` — and then as one line. Found on a real run, where a long answer
+  scrolled past twice.
+- **`--replay` no longer prints the task twice**, once from the command and once
+  from the persisted `run_start` it replays.
+
 ## 0.6.0
 
 - **`curvet agent`** — run a Curvet agent from the terminal and watch it work.
