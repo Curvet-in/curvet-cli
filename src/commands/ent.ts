@@ -16,19 +16,25 @@ import {
   type InviteRow,
 } from "../enterprise.js";
 
-/** Every `ent` command needs the org-scoped key, not the playground one. */
-function requireEnterpriseKey(profile: ResolvedProfile): void {
-  if (!profile.enterpriseKey) {
-    throw new Error(
-      "This command needs an enterprise key (org scope). Run `curvet auth login` " +
-        "and paste one, or set CURVET_ENTERPRISE_KEY.",
-    );
-  }
+/**
+ * Every `ent` command needs org scope — which is either an enterprise key, or a
+ * `curvet login` carrying `enterprise:admin`.
+ *
+ * Not the playground app key: that authenticates an *app*, and an app has no
+ * business administering the organization that owns it.
+ */
+function requireOrgScope(profile: ResolvedProfile): void {
+  if (profile.enterpriseKey || profile.cliToken) return;
+  throw new Error(
+    "This command needs organization access.\n" +
+      "  Run `curvet login --scope enterprise:admin`, or set CURVET_ENTERPRISE_KEY\n" +
+      "  (or paste an enterprise key with `curvet auth login`).",
+  );
 }
 
 async function enterpriseClient(cmd: Command): Promise<{ client: Curvet; profile: ResolvedProfile }> {
   const profile = await resolveProfile(cmd.optsWithGlobals().profile);
-  requireEnterpriseKey(profile);
+  requireOrgScope(profile);
   return { client: makeClient(profile), profile };
 }
 
@@ -41,7 +47,19 @@ const SPEND_ORDER = pc.dim(
   "Company spend draws in order: the member's own allotment, then the org pool, then their personal credits.",
 );
 
-function memberRows(members: EnterpriseMember[]): string[][] {
+/**
+ * Per-member pool access only means anything in a `per_member` org. In a shared
+ * one the server refuses to set it ("in a shared org every member already draws
+ * the pool"), yet the stored value still resolves to on/off through the role —
+ * so printing it verbatim shows a live-looking setting for something that does
+ * not apply. Say "n/a" and explain underneath instead.
+ */
+function poolCell(member: EnterpriseMember, creditModel?: string): string {
+  if (creditModel && creditModel !== "per_member") return pc.dim("n/a");
+  return describePoolAccess(member);
+}
+
+function memberRows(members: EnterpriseMember[], creditModel?: string): string[][] {
   return members.map((m) => [
     m.email,
     m.role,
@@ -49,9 +67,20 @@ function memberRows(members: EnterpriseMember[]): string[][] {
     trimNumber(m.used),
     m.cap === 0 ? "uncapped" : trimNumber(m.cap),
     m.remaining == null ? "—" : trimNumber(m.remaining),
-    describePoolAccess(m),
+    poolCell(m, creditModel),
     m.isRestricted ? "restricted" : "",
   ]);
+}
+
+/** How this org bills, so the numbers above have a meaning attached. */
+function creditModelNote(creditModel?: string): string {
+  if (creditModel === "per_member") {
+    return SPEND_ORDER + pc.dim("\nPool access is per-member here — set it with `ent members pool-access`.");
+  }
+  return pc.dim(
+    `This is a ${creditModel ?? "shared"}-pool organization: members spend the shared pool directly, ` +
+      "so per-member pool access does not apply.",
+  );
 }
 
 const MEMBER_HEADERS = [
@@ -78,7 +107,11 @@ function overviewCommand(): Command {
         return;
       }
 
-      const org = data.organization as { name?: string; subscriptionTier?: string };
+      const org = data.organization as {
+        name?: string;
+        subscriptionTier?: string;
+        creditModel?: string;
+      };
       console.log(pc.bold(org.name ?? "organization") + pc.dim(` · ${data.month}`));
       console.log(
         table(
@@ -96,9 +129,9 @@ function overviewCommand(): Command {
 
       if (data.members.length > 0) {
         console.log(`\n${pc.bold("MEMBERS")}`);
-        console.log(table(MEMBER_HEADERS, memberRows(data.members)));
+        console.log(table(MEMBER_HEADERS, memberRows(data.members, org.creditModel)));
       }
-      console.log(`\n${SPEND_ORDER}`);
+      console.log(`\n${creditModelNote(org.creditModel)}`);
     });
 }
 
@@ -306,7 +339,11 @@ function membersListCommand(): Command {
     .option("--json", "machine-readable output")
     .action(async (opts, cmd) => {
       const { client } = await enterpriseClient(cmd);
-      const members = await client.enterprise.members.list();
+      // The overview carries the members AND the org's credit model, in one
+      // request. The pool column cannot be rendered honestly without the latter.
+      const data = await client.enterprise.overview();
+      const members = data.members ?? [];
+      const creditModel = (data.organization as { creditModel?: string })?.creditModel;
 
       if (opts.json) {
         printJson(members);
@@ -316,8 +353,8 @@ function membersListCommand(): Command {
         console.log(warn("No members yet — invite some with `curvet ent invite create`."));
         return;
       }
-      console.log(table(MEMBER_HEADERS, memberRows(members)));
-      console.log(`\n${SPEND_ORDER}`);
+      console.log(table(MEMBER_HEADERS, memberRows(members, creditModel)));
+      console.log(`\n${creditModelNote(creditModel)}`);
     });
 }
 
