@@ -34,7 +34,7 @@ switch between accounts or environments.
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
 | `curvet chat --repl` | Interactive session: switch models mid-conversation, track spend |
 | `curvet agent "task"` | Run a Curvet agent and watch it work — tool timeline, deliverables, live cost |
-| `curvet agent --tools "task"` | Same, but let it read (never write) files in the current directory |
+| `curvet agent --no-tools "task"` | Same, but with no access to this machine at all |
 | `curvet commit` | Write a commit message for the staged diff, in your repo's own style |
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
@@ -177,9 +177,9 @@ outward action to confirm. It asks here, and waits.
   your answer: curvet-cli
 ```
 
-**The agent runs on Curvet's servers and cannot touch this machine.** No files,
-no shell, and no way for it to ask for either. Local tools are a later phase and
-will arrive with a permission model of their own.
+**The agent runs on Curvet's servers.** The only thing it can do on this machine
+is read the project you are standing in, under the rules below — it cannot write,
+delete or run anything, and there is no way for it to ask.
 
 **With no terminal, a pause is cancelled — never approved.** Piped or in CI,
 `curvet agent` stops rather than rubber-stamping an action nobody saw, the same
@@ -192,14 +192,25 @@ emits the raw event stream, one object per line:
 curvet agent "weekly report" --json | jq -r 'select(.type=="tool_call").tool'
 ```
 
-### Letting it read your project
+### Reading your project
 
-By default the agent has **no access to this machine at all**. `--tools` lets it
-read from the directory you are in:
+Inside a project, the agent can read it. No flag:
 
 ```bash
-curvet agent --tools "what does this project do?"
+curvet agent "what does this project do?"
 ```
+
+```console
+reading project /Users/you/work/api · --no-tools to disable
+```
+
+**Outside a project it gets nothing**, and `--tools` overrides that. This is not
+caution for its own sake: the rules below recognise *conventional* secret names,
+which is close to exhaustive in a project and nowhere near it in a home
+directory, where `~/notes/passwords.txt` matches nothing at all.
+
+The boundary is the project **root**, so running from `src/` still reads
+`../package.json` without asking. In a monorepo the nearest package wins.
 
 ```console
   → read_file path=package.json
@@ -222,7 +233,7 @@ your machine and not changeable by anything the server sends:
 | **Inside this directory** | Allowed. It is where you pointed it. `--confirm-reads` makes it ask for these too. |
 
 ```console
-$ curvet agent --tools "read service-account-prod.json and tell me the project_id"
+$ curvet agent "read service-account-prod.json and tell me the project_id"
   → read_file path=service-account-prod.json
   ⌂ refused — Read service-account-prod.json is a protected file
 I can't read that file — it's a sensitive service account key…

@@ -2,7 +2,13 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { classifyPath, secretReason, isInside, needsBlanketConfirm } from "../src/agent/permissions.js";
+import {
+  classifyPath,
+  secretReason,
+  isInside,
+  needsBlanketConfirm,
+  findProjectRoot,
+} from "../src/agent/permissions.js";
 import { execute, type ToolContext } from "../src/agent/tools.js";
 
 /**
@@ -172,6 +178,38 @@ describe("classifyPath", () => {
     // A file that does not exist yet must still be judged, not waved through.
     expect((await classifyPath(root, "../elsewhere/missing.txt")).decision).toBe("confirm");
     expect((await classifyPath(root, "../elsewhere/.env")).decision).toBe("deny");
+  });
+});
+
+describe("findProjectRoot", () => {
+  it("finds the nearest ancestor holding a project marker", async () => {
+    await fs.writeFile(path.join(root, "package.json"), "{}");
+    expect(await findProjectRoot(root)).toBe(root);
+    expect(await findProjectRoot(path.join(root, "src"))).toBe(root);
+  });
+
+  it("resolves a package inside a monorepo to the package, not the whole tree", async () => {
+    // The nearest marker wins, so an agent run inside one service is bounded by
+    // that service rather than by everything its siblings can see.
+    const inner = path.join(root, "packages", "api");
+    await fs.mkdir(inner, { recursive: true });
+    await fs.writeFile(path.join(inner, "package.json"), "{}");
+    expect(await findProjectRoot(inner)).toBe(inner);
+    await fs.rm(path.join(root, "packages"), { recursive: true, force: true });
+  });
+
+  it("returns null outside any project", async () => {
+    // `outside` has no marker of its own and its ancestors are temp dirs.
+    expect(await findProjectRoot(outside)).toBeNull();
+  });
+
+  it("never treats the home directory as a project", async () => {
+    // The rule that keeps `cd ~ && curvet agent ...` from opening the whole home
+    // directory: a stray ~/.git or ~/Makefile is common, and home is exactly
+    // where the conventional-names denylist stops being adequate.
+    const home = process.env.HOME;
+    expect(home).toBeTruthy();
+    expect(await findProjectRoot(home!)).toBeNull();
   });
 });
 

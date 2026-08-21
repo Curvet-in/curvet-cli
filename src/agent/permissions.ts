@@ -33,6 +33,61 @@ import { promises as fs } from "node:fs";
  * are checked so a link to a secret is denied rather than merely confirmed.
  */
 
+/**
+ * Files that mark the top of a project. Checked in no particular order — the
+ * nearest ancestor holding any of them wins, so a package inside a monorepo
+ * resolves to the package and not the whole tree.
+ */
+const PROJECT_MARKERS = [
+  ".git", ".hg", ".svn",
+  "package.json", "deno.json", "bun.lockb",
+  "pyproject.toml", "setup.py", "requirements.txt", "Pipfile",
+  "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts",
+  "Gemfile", "composer.json", "mix.exs", "Package.swift", "CMakeLists.txt",
+  "Makefile",
+];
+
+/**
+ * The project `from` sits inside, or null if it does not sit inside one.
+ *
+ * This is what decides whether the agent may read anything at all by default,
+ * and the reasoning is worth stating because it is not "reads are dangerous".
+ *
+ * The secret denylist in this file recognises CONVENTIONAL names — `.env`,
+ * `*.pem`, `.ssh/`, `.aws/`. Inside a project that is close to exhaustive,
+ * because projects put credentials in conventional places. A home directory does
+ * not: `~/notes/passwords.txt` matches nothing here, and neither does a folder of
+ * client contracts. So the denylist is only as good as the assumption that it is
+ * looking at a project, and outside one that assumption is simply false.
+ *
+ * Stops at the home directory rather than treating it as a project, even though
+ * a stray `~/.git` or `~/Makefile` is common. Home is exactly the place this must
+ * not open up.
+ */
+export async function findProjectRoot(from: string): Promise<string | null> {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  let dir = path.resolve(from);
+
+  for (let depth = 0; depth < 40; depth++) {
+    // Home is a boundary, not a project — but a project may legitimately live
+    // BELOW it, so only stop once we have climbed all the way up to home itself.
+    if (home && path.resolve(dir) === path.resolve(home)) return null;
+
+    for (const marker of PROJECT_MARKERS) {
+      try {
+        await fs.access(path.join(dir, marker));
+        return dir;
+      } catch {
+        /* not this one */
+      }
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null; // filesystem root
+    dir = parent;
+  }
+  return null;
+}
+
 export type Verdict =
   | { decision: "allow"; scope: "inside" }
   | { decision: "confirm"; scope: "outside"; display: string }

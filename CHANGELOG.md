@@ -2,6 +2,26 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.8.0
+
+- **Reading your project is now the default.** `curvet agent` inside a project
+  can read it; `--tools` is gone from the common path. A flag everybody passes is
+  a flag that should not exist.
+
+  It is off outside a project, and that is not a compromise — it is the condition
+  the permission layer was written for. Its denylist recognises *conventional*
+  names: `.env`, `*.pem`, `.ssh/`, `.aws/`. Inside a project that is close to
+  exhaustive, because projects keep credentials in known places. A home directory
+  does not: `~/notes/passwords.txt` matches nothing. So the rules that make reads
+  safe hold inside a project and stop holding outside one.
+
+  `--tools` now means "read here anyway", `--no-tools` means "stay off this
+  machine", and every run says which it is doing on its first line.
+
+- **The boundary is the project root, not the working directory.** Running from
+  `src/` no longer asks permission to read `../package.json`. The nearest marker
+  wins, so a package inside a monorepo is bounded by that package.
+
 ## 0.7.0
 
 - **`curvet agent --tools`** — let the agent read the project you are standing
