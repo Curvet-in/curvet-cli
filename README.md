@@ -33,6 +33,7 @@ switch between accounts or environments.
 | `curvet models [--type chat] [--capability] [--include all]` | List models; keyless via the public catalogue, per-app (with rate limits) once logged in |
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
 | `curvet chat --repl` | Interactive session: switch models mid-conversation, track spend |
+| `curvet agent "task"` | Run a Curvet agent and watch it work — tool timeline, deliverables, live cost |
 | `curvet commit` | Write a commit message for the staged diff, in your repo's own style |
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
@@ -142,6 +143,57 @@ exactly when you want to scroll up and copy an answer.
 
 `/model` tells you when a model **can't** stream — 28 of the 43 chat models are
 absent from the OpenAI-compatible surface and answer all at once.
+
+## Agents
+
+```bash
+curvet login --scope agency:run        # once — not granted by default
+curvet agent "go through my unread email and draft replies to anything from a customer"
+```
+
+The run streams: the agent's reasoning as it writes it, each tool call and what
+it returned, deliverables as they land, and the cost when it finishes.
+
+```console
+$ curvet agent "what did I spend on AI last month?"
+run run_mfk2p_a91xz
+Analyst
+  → recall key=billing
+  ← ✓ 2 memories
+  → web_search query=curvet pricing
+  ← ✓ 4 results
+You spent $41.20 across 1,204 requests last month, up 18% on July…
+
+done · 12.4s · $0.0138
+```
+
+A run can stop and ask you something — a question, a plan to approve, an
+outward action to confirm. It asks here, and waits.
+
+```console
+? Which repository did you mean?
+  options: curvet-cli  ·  curvet-sdk
+  your answer: curvet-cli
+```
+
+**The agent runs on Curvet's servers and cannot touch this machine.** No files,
+no shell, and no way for it to ask for either. Local tools are a later phase and
+will arrive with a permission model of their own.
+
+**With no terminal, a pause is cancelled — never approved.** Piped or in CI,
+`curvet agent` stops rather than rubber-stamping an action nobody saw, the same
+rule `curvet apps delete` follows.
+
+`--quiet` drops the tool timeline and prints only the agent's text. `--json`
+emits the raw event stream, one object per line:
+
+```bash
+curvet agent "weekly report" --json | jq -r 'select(.type=="tool_call").tool'
+```
+
+`curvet agent --runs` lists recent runs; `--replay <runId>` shows what a
+finished one did. (A replay has the tool timeline but not the token-by-token
+text — that is streamed, not stored.)
 
 ## Commit messages
 

@@ -4,6 +4,26 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## 0.6.0
 
+- **`curvet agent`** — run a Curvet agent from the terminal and watch it work.
+  Streams the run: the agent's text token by token, a tool timeline, deliverables
+  as they land, and the cost when it finishes. A run that pauses for a human —
+  a question, a plan to approve, an outward action to confirm — gets asked here.
+
+  Needs a scope the default login does not request: `curvet login --scope
+  agency:run`. It is withheld deliberately, because it is the only grant that
+  spends credits by itself and reaches tools that can send email as you.
+
+  Inline rather than full-screen, for the same reasons as `--repl` above, and
+  because there is nothing yet that a persistent pane would hold. `--json` emits
+  the raw event stream one object per line, so a run can be piped into `jq`.
+
+  **The agent runs on Curvet's servers and cannot touch this machine.** No files,
+  no shell, and no way for it to ask. Local tools are a later phase with a
+  permission model of their own.
+
+  With no terminal — piped, or in CI — a pause is **cancelled, never approved**.
+  The same rule `curvet apps delete` follows: nobody there to answer is not a yes.
+
 - **`curvet chat --repl`** — an interactive session. Replies stream inline,
   `/model` switches mid-conversation with tab-completion, `/cost` tracks the
   session, `/save` writes a transcript, and history persists between runs.
