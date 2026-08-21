@@ -2,6 +2,8 @@ import { createRequire } from "node:module";
 import { Command } from "commander";
 import { formatError } from "./output.js";
 import { authCommand } from "./commands/auth.js";
+import { loginCommand, logoutCommand } from "./commands/login.js";
+import { appsCommand, keysCommand } from "./commands/apps.js";
 import { modelsCommand } from "./commands/models.js";
 import { chatCommand } from "./commands/chat.js";
 import { imageCommand } from "./commands/image.js";
@@ -26,7 +28,11 @@ const program = new Command()
   .version(pkg.version)
   .option("--profile <name>", "config profile to use (default: the `auth use` default)");
 
+program.addCommand(loginCommand());
+program.addCommand(logoutCommand());
 program.addCommand(authCommand());
+program.addCommand(appsCommand());
+program.addCommand(keysCommand());
 program.addCommand(modelsCommand());
 program.addCommand(chatCommand());
 program.addCommand(imageCommand());

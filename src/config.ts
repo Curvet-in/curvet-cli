@@ -5,6 +5,8 @@ import path from "node:path";
 export interface ProfileConfig {
   appKey?: string;
   enterpriseKey?: string;
+  /** From `curvet login` — app and key management. See `curvet auth status`. */
+  cliToken?: string;
   baseURL?: string;
   defaultModel?: string;
 }
@@ -24,6 +26,7 @@ export interface ResolvedProfile extends ProfileConfig {
   sources: {
     appKey?: CredentialSource;
     enterpriseKey?: CredentialSource;
+    cliToken?: CredentialSource;
     baseURL?: CredentialSource;
   };
 }
@@ -99,6 +102,13 @@ export async function resolveProfile(name?: string): Promise<ResolvedProfile> {
     resolved.sources.appKey = "env";
   } else if (stored.appKey) {
     resolved.sources.appKey = "profile";
+  }
+
+  if (process.env.CURVET_CLI_TOKEN) {
+    resolved.cliToken = process.env.CURVET_CLI_TOKEN;
+    resolved.sources.cliToken = "env";
+  } else if (stored.cliToken) {
+    resolved.sources.cliToken = "profile";
   }
 
   if (process.env.CURVET_ENTERPRISE_KEY) {

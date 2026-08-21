@@ -45,12 +45,14 @@ async function promptSecret(promptText: string): Promise<string> {
 async function validateKeys(opts: {
   appKey?: string;
   enterpriseKey?: string;
+  cliToken?: string;
   baseURL?: string;
 }): Promise<string[]> {
   const notes: string[] = [];
   const client = new Curvet({
     appKey: opts.appKey,
     enterpriseKey: opts.enterpriseKey,
+    cliToken: opts.cliToken,
     baseURL: opts.baseURL,
   });
   if (opts.appKey) {
@@ -59,6 +61,16 @@ async function validateKeys(opts: {
     notes.push(
       `app key valid — ${models.length} models available` +
         (limits ? `, ${limits.requestsPerHour} req/h, $${limits.costCapPerDay}/day cap` : ""),
+    );
+  }
+  if (opts.cliToken) {
+    const me = await client.auth.whoami();
+    const days = me.device.expiresAt
+      ? Math.round((Date.parse(me.device.expiresAt) - Date.now()) / 86_400_000)
+      : null;
+    notes.push(
+      `signed in as ${me.user.email} — ${me.scopes.join(", ")}` +
+        (days != null ? `, expires in ${days} days` : ""),
     );
   }
   if (opts.enterpriseKey) {
@@ -141,6 +153,7 @@ export function authCommand(): Command {
             name: active.name,
             appKey: active.appKey ? maskKey(active.appKey) : null,
             enterpriseKey: active.enterpriseKey ? maskKey(active.enterpriseKey) : null,
+            cliToken: active.cliToken ? maskKey(active.cliToken) : null,
             baseURL: active.baseURL ?? null,
             sources: active.sources,
           },
@@ -150,6 +163,7 @@ export function authCommand(): Command {
               {
                 appKey: p.appKey ? maskKey(p.appKey) : null,
                 enterpriseKey: p.enterpriseKey ? maskKey(p.enterpriseKey) : null,
+                cliToken: p.cliToken ? maskKey(p.cliToken) : null,
                 baseURL: p.baseURL ?? null,
               },
             ]),
@@ -159,8 +173,8 @@ export function authCommand(): Command {
       }
 
       const names = Object.keys(config.profiles);
-      if (names.length === 0 && !active.appKey && !active.enterpriseKey) {
-        console.log(warn("No profiles configured. Run `curvet auth login` to get started."));
+      if (names.length === 0 && !active.appKey && !active.enterpriseKey && !active.cliToken) {
+        console.log(warn("No profiles configured. Run `curvet login` to get started."));
         return;
       }
       const rows = names.map((name) => {
@@ -169,10 +183,11 @@ export function authCommand(): Command {
           name === active.name ? `${name} ${pc.green("(active)")}` : name,
           p.appKey ? maskKey(p.appKey) : pc.dim("—"),
           p.enterpriseKey ? maskKey(p.enterpriseKey) : pc.dim("—"),
+          p.cliToken ? pc.green("signed in") : pc.dim("—"),
           p.baseURL ?? pc.dim("default"),
         ];
       });
-      console.log(table(["PROFILE", "APP KEY", "ENTERPRISE KEY", "BASE URL"], rows));
+      console.log(table(["PROFILE", "APP KEY", "ENTERPRISE KEY", "LOGIN", "BASE URL"], rows));
       for (const [field, source] of Object.entries(active.sources)) {
         if (source === "env") {
           console.log(

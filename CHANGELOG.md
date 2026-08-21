@@ -2,6 +2,39 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.5.0
+
+`curvet login` — sign in from the terminal, and manage apps and keys without a
+browser.
+
+- **`curvet login` / `curvet logout`** — device-code sign-in (RFC 8628). Prints
+  a code, opens the approval page, polls until you approve. The code is printed
+  *before* the browser opens so the flow works over SSH and in containers, and
+  `--no-browser` never opens one. Logins last 90 days and are revocable per
+  machine.
+  - Running it again on a machine that is already signed in costs one request
+    and no browser: it validates the token it has and stops. `--force`
+    re-authorises, and lands on the same device's record rather than adding
+    another.
+  - A brand-new account gets its first app created and its key saved, because
+    otherwise a successful login is followed one second later by "no app key".
+    Nothing is created if you already have apps.
+- **`curvet apps list|show|create|update|delete|use`** — full app management,
+  including `--models`, `--categories`, `--rate-limit` and `--cost-cap`.
+  `--use` points the active profile at a new app's key.
+- **`curvet keys rotate|show`** — rotate an app's credentials, or read its
+  secret.
+- **Anything that hands over or destroys a credential asks first.** `--yes`
+  skips it for CI, and with no terminal to ask the command refuses rather than
+  assuming yes — a piped `curvet apps delete` should stop, not destroy an app
+  because nobody was there to answer.
+- `curvet ent` now works from a login carrying `enterprise:admin`, with no
+  enterprise key to create or store.
+- `curvet auth status` reports the login alongside any pasted keys.
+
+Requires `@curvet/sdk` >= 0.9.0 and the darkapp-haven backend that ships the
+`/api/v1/auth/cli` endpoints.
+
 ## 0.4.0
 
 One release covering three things: the distribution commands that let other

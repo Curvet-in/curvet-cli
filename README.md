@@ -42,6 +42,9 @@ switch between accounts or environments.
 | `curvet analytics [--start] [--end]` | Requests, cost, and latency broken down by model, category, and status |
 | `curvet balance [--watch]` | Credit balance breakdown; `--watch` polls and shows burn rate |
 | `curvet ent overview\|invite\|members` | Enterprise admin: pool, invites, allotments, pool access (enterprise key) |
+| `curvet login\|logout` | Sign in so the CLI can manage your apps and keys |
+| `curvet apps list\|create\|update\|delete\|use` | Manage apps and their configuration |
+| `curvet keys rotate\|show` | Rotate an app's credentials, or read its secret |
 | `curvet auth login\|status\|use` | Manage profiles and credentials |
 | `curvet config list\|get\|set\|unset` | Read and write CLI settings |
 | `curvet doctor` | Diagnose config, key scopes, connectivity, and headroom |
@@ -234,6 +237,78 @@ rather than holding a tool call open for minutes; pass `wait: true` if you'd
 rather block. Every result carries what it cost, and every tool description says
 whether it spends credits — an agent driving this can see its own spend.
 
+## Signing in
+
+`curvet login` signs the CLI in to your account, so it can manage apps and keys —
+things an app key cannot do, because an app key authenticates an *app*, and
+letting one mint or rotate another would make revoking it meaningless.
+
+```bash
+curvet login                              # opens a browser, prints a code
+curvet login --scope enterprise:admin     # also administer your org
+curvet login --no-browser                 # over SSH or in a container
+curvet logout
+```
+
+```console
+$ curvet login
+
+  Your code is BCDF-GHJK
+
+  https://curvet.in/cli?code=BCDF-GHJK
+
+This device is asking to:
+  · see your apps and their usage
+  · create, configure and delete your apps
+  · rotate your app keys and read your app secrets
+
+Waiting for approval… (Ctrl-C to cancel)
+✔ signed in as you@example.com
+✔ created your first app "CLI" and saved its key
+  app_9f2c11…4d81 — try `curvet chat "hello"`
+```
+
+The code is printed **before** the browser opens, so the flow works when no
+browser can open at all. Running `curvet login` again on a machine that is
+already signed in costs one request and no browser — it checks the token it has
+and stops. `--force` re-authorises.
+
+A brand-new account gets an app created for it, because otherwise a successful
+login is followed one second later by "no app key". If you already have apps,
+nothing is created.
+
+The login lasts 90 days and is revocable on its own, per machine.
+
+## Apps and keys
+
+```bash
+curvet apps list
+curvet apps create "Nightly Digest" --models gpt-4o-mini --rate-limit 250 --use
+curvet apps show <appId>
+curvet apps update <appId> --cost-cap 5
+curvet apps use <appId>            # point this profile at that app's key
+curvet apps delete <appId>         # asks first
+
+curvet keys rotate <appId>         # asks first
+curvet keys show <appId>           # asks first
+```
+
+Anything that hands over or destroys a credential asks before doing it:
+
+```console
+$ curvet keys rotate app_67818127
+The current key stops working the moment this completes. Anything still
+using it starts failing, including anything you have deployed.
+Rotate the key for "Nightly Digest"? [y/N]
+```
+
+`--yes` skips the prompt for CI. With no terminal to ask, the command **refuses
+rather than assuming yes** — a piped `curvet apps delete` should stop, not
+destroy an app because nobody was there to answer.
+
+With `--scope enterprise:admin`, every `curvet ent` command works from your
+login, with no enterprise key to create or store.
+
 ## Enterprise
 
 Needs an **enterprise key** (`cvent_ent_…`), not an app key — save one with
@@ -295,7 +370,6 @@ continues; the command exits non-zero if any failed.
 
 ## Roadmap
 
-- `curvet login` — browser device flow for app management and key rotation
 
 ## Development
 
