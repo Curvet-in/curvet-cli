@@ -60,7 +60,10 @@ fi
 # Publish. npm will prompt for passkey/2FA authorization in your browser.
 echo "==> Publishing @curvet/cli@${VERSION#v} to npm..."
 echo "    (npm will ask you to authorize with your passkey -- approve it to continue.)"
-npm publish
+# --ignore-scripts skips prepublishOnly, which is the same typecheck/test/build
+# already run above -- without it every release validates twice. Safe precisely
+# because that validation ran, on this exact tree, minutes ago.
+npm publish --ignore-scripts
 
 # Only reached after a successful publish.
 echo "==> Pushing ${VERSION} to GitHub..."
