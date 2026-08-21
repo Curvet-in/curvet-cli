@@ -124,6 +124,34 @@ describe("RunRenderer", () => {
     expect(text()).toContain("$0.0123");
   });
 
+  it("does not repeat the answer it just streamed", () => {
+    // run_end.summary IS the final text in full. Printing it after streaming the
+    // same words gave every answer twice, and the longer the answer the worse it
+    // read — which is how it was found, on a real run.
+    const answer = "Bengaluru is the capital of Karnataka.";
+    const { renderer, text } = capture();
+    renderer.handle({ type: "agent_delta", text: answer });
+    renderer.handle({ type: "run_end", summary: answer, durationMs: 1200, costUsd: 0.01 });
+    expect(text().match(/Bengaluru/g)).toHaveLength(1);
+    expect(text()).toContain("1.2s");
+  });
+
+  it("still shows a summary when nothing was streamed", () => {
+    // A tool-only run, or --quiet: the summary is the only text there is.
+    const { renderer, text } = capture();
+    renderer.handle({ type: "tool_result", tool: "send_email", summary: "sent", ok: true });
+    renderer.handle({ type: "run_end", summary: "Emailed the report.", durationMs: 900 });
+    expect(text()).toContain("Emailed the report.");
+  });
+
+  it("caps a long unstreamed summary to one line", () => {
+    const { renderer, text } = capture();
+    renderer.handle({ type: "run_end", summary: "word ".repeat(200), durationMs: 100 });
+    const last = text().trim().split("\n").filter(Boolean).pop() ?? "";
+    expect(last.length).toBeLessThan(200);
+    expect(last).toContain("…");
+  });
+
   it("quiet mode keeps the agent's text and drops the timeline", () => {
     const { renderer, text } = capture(true);
     renderer.handle({ type: "agent_delta", text: "the answer" });

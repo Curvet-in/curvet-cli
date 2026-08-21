@@ -65,6 +65,8 @@ export function formatDuration(ms?: number): string {
  */
 export class RunRenderer {
   private streaming = false;
+  /** Sticky for the whole run, unlike `streaming`, which closes per paragraph. */
+  private streamedText = false;
   private deliverables: { title: string; url?: string; kind?: string }[] = [];
   private currentAgent = "";
 
@@ -110,6 +112,7 @@ export class RunRenderer {
         if (e.text) {
           this.write(String(e.text));
           this.streaming = true;
+          this.streamedText = true;
         }
         break;
 
@@ -154,13 +157,22 @@ export class RunRenderer {
 
       case "run_end": {
         this.breakStream();
+        // `summary` is the run's final text in full, which has usually just been
+        // streamed word for word — printing it again gave every answer twice, and
+        // the longer the answer the worse it read. So it only appears when nothing
+        // was streamed (a tool-only run, or --quiet), and even then as one line.
+        const summary = String(e.summary ?? "").replace(/\s+/g, " ").trim();
         const bits = [
-          e.summary ? String(e.summary) : "",
+          this.streamedText || !summary
+            ? ""
+            : summary.length > 120
+              ? `${summary.slice(0, 120)}…`
+              : summary,
           formatDuration(e.durationMs as number),
           typeof e.costUsd === "number" ? `$${(e.costUsd as number).toFixed(4)}` : "",
           typeof e.creditsBilled === "number" && e.creditsBilled > 0 ? `${e.creditsBilled} credits` : "",
         ].filter(Boolean);
-        this.line(pc.dim(`\n${bits.join(" · ")}`));
+        if (bits.length) this.line(pc.dim(`\n${bits.join(" · ")}`));
         break;
       }
 
@@ -409,7 +421,8 @@ export function agentCommand(): Command {
         if (opts.replay) {
           const run = await client.agency.retrieve(opts.replay);
           if (opts.json) return printJson(run);
-          console.log(pc.dim(`▸ ${run.task ?? ""}`));
+          // The task is not printed here: the persisted run_start carries it, and
+          // the renderer prints that — doing both showed it twice.
           const renderer = new RunRenderer(opts.quiet === true);
           for (const e of run.events ?? []) renderer.handle(e);
           renderer.finish();
