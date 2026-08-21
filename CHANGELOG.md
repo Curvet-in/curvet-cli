@@ -2,6 +2,39 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.6.0
+
+- **`curvet chat --repl`** — an interactive session. Replies stream inline,
+  `/model` switches mid-conversation with tab-completion, `/cost` tracks the
+  session, `/save` writes a transcript, and history persists between runs.
+  Ctrl-C stops a reply in progress rather than the session; a partial reply
+  stays in context, because the next thing you say usually refers to it.
+
+  Readline rather than a full-screen TUI, deliberately: an alternate-screen app
+  takes your terminal scrollback with it when you quit — exactly when you want
+  to scroll up and copy an answer — and it would have added ~6MB of dependencies
+  to a tool whose pitch is `npm i -g`.
+
+  `/model` reports when a model cannot stream, since 28 of 43 chat models are
+  absent from the OpenAI-compatible surface and silently answer all at once.
+
+- **`curvet commit`** — writes a commit message for the staged diff.
+  - Reads your last ten commits and matches the style already there, rather than
+    imposing conventional-commits on a repo that does not use them. Detected,
+    not configured.
+  - Excludes lockfiles, build output and binaries, and cuts an oversized diff at
+    a file boundary while telling the model it was truncated — otherwise the
+    message confidently describes whichever half survived.
+  - Picks the model by what a *commit-shaped* turn costs: thousands of tokens in,
+    a handful out, so the input rate dominates. Ranking by the headline output
+    price picks differently, and worse.
+  - If the catalogue offers a model that then fails, it falls back to the next
+    and says which it skipped. Two models are currently advertised as available
+    and fail every call.
+  - `--print` emits the message alone on stdout, so `curvet commit --print |
+    git commit -F -` works. Nothing is committed unprompted; `--yes` for scripts,
+    and with no terminal it refuses rather than assuming yes.
+
 ## 0.5.0
 
 `curvet login` — sign in from the terminal, and manage apps and keys without a
