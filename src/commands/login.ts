@@ -12,6 +12,7 @@ const SCOPE_PROSE: Record<string, string> = {
   "apps:read": "see your apps and their usage",
   "apps:write": "create, configure and delete your apps",
   "apps:keys": "rotate your app keys and read your app secrets",
+  "agency:run": "run agents as you — spending your credits, and using tools that can send email and messages on your behalf",
   "enterprise:admin": "administer your organization, including minting enterprise API keys",
 };
 
