@@ -32,6 +32,8 @@ switch between accounts or environments.
 |---|---|
 | `curvet models [--type chat] [--capability] [--include all]` | List models; keyless via the public catalogue, per-app (with rate limits) once logged in |
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
+| `curvet chat --repl` | Interactive session: switch models mid-conversation, track spend |
+| `curvet commit` | Write a commit message for the staged diff, in your repo's own style |
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
 | `curvet stt clip.mp3` | Transcribe audio; prints the text, `-o` writes it to a file |
@@ -102,6 +104,70 @@ $ curvet stt clip.mp3 -m whisper-large-v3 --allow-fallback
 The quick brown fox jumps over the lazy dog.
 — whisper-large-v3 · 1 credit · 2522.32 left
 ```
+
+## Interactive chat
+
+```bash
+curvet chat --repl
+```
+
+```console
+› explain this stack trace
+Sure — the failure is at line 40 of…
+— gpt-5.5 · 0.4 credits (metered) · 2.1k in / 340 out · 3.2s
+
+› /model claude-sonnet-4-6
+  switched to claude-sonnet-4-6
+
+› /cost
+  6 messages · 2.8 credits · $0.028
+```
+
+| | |
+|---|---|
+| `/model [id]` | show or switch model, mid-conversation, with tab-completion |
+| `/models` | chat models ranked by what a turn actually costs |
+| `/cost` | what this session has spent |
+| `/system <text>` | set the system prompt (resets the conversation) |
+| `/clear` | start over, same model |
+| `/save [file]` | write the transcript to a file |
+| `/help`, `/exit` | |
+
+Ctrl-C stops a reply in progress; on an empty line it exits. A line ending in
+`\` continues on the next. History persists between sessions.
+
+Replies stream inline rather than into a full-screen TUI, deliberately: an
+alternate-screen app would take your scrollback with it when you quit, which is
+exactly when you want to scroll up and copy an answer.
+
+`/model` tells you when a model **can't** stream — 28 of the 43 chat models are
+absent from the OpenAI-compatible surface and answer all at once.
+
+## Commit messages
+
+```bash
+curvet commit                 # write a message for the staged diff, then commit
+curvet commit -a              # stage tracked changes first
+curvet commit --print         # print it and stop
+curvet commit --hint "the 402 was a provider outage, not our bug"
+```
+
+It reads your last ten commits and **matches the style already there** —
+conventional prefixes or prose, terse or explanatory. That's the one thing a
+generic model reliably gets wrong, and your log already answers it.
+
+Lockfiles, build output and binaries are excluded (they're most of the payload
+and none of the meaning), and an oversized diff is cut at a file boundary with
+the model told that it was — a truncated diff otherwise produces a confident
+message about the half it happened to see.
+
+The model is chosen by what *this* job costs: a commit is thousands of tokens in
+and a handful out, so the input rate dominates. Typically under a hundredth of a
+credit. If the catalogue offers a model that then fails, it moves to the next and
+says so.
+
+Nothing is committed until you've seen the message. `--yes` skips the prompt;
+with no terminal it refuses rather than assuming yes.
 
 ### Pipes are first-class
 
