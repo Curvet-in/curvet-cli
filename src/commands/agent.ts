@@ -10,7 +10,7 @@ import {
   type Curvet,
 } from "@curvet/sdk";
 import { SUPPORTED_TOOLS, execute, type ToolContext } from "../agent/tools.js";
-import { classifyPath } from "../agent/permissions.js";
+import { classifyPath, needsBlanketConfirm } from "../agent/permissions.js";
 import { record as auditRecord, readRecent, auditPath } from "../agent/audit.js";
 import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { makeClient, requireCliToken } from "../client.js";
@@ -396,7 +396,7 @@ async function runLocalTool(
   if (opts.confirmReads) {
     const target = String((call.rawInput as { path?: unknown }).path ?? ".");
     const verdict = await classifyPath(cwd, target);
-    if (verdict.decision !== "deny") {
+    if (needsBlanketConfirm(verdict, true)) {
       const allowed = await ctx.confirm(call.title, `  in ${cwd}`);
       if (!allowed) {
         await auditRecord({
