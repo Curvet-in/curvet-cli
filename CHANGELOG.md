@@ -4,6 +4,19 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## 0.6.1
 
+- **`curvet agent` has a proper palette.** Fifteen of its twenty-four colour
+  decisions were `dim`, so a run came out as one grey wash and the deliverable —
+  the thing you ran the command for — read as faintly as the run id. There are
+  now four roles, defined in one place: the agent's own words unstyled (the only
+  colour legible on a light terminal and a dark one), the deliverable bold with a
+  marked, underlined link, the tool timeline coloured so it can be scanned, and
+  ids/timings/cost in grey.
+
+  `gray` rather than `dim` throughout: dim is a terminal attribute that many
+  themes render at very low contrast and some ignore. No colour is nested inside
+  a dim span any more either — the inner reset closed the span early, which is
+  what washed out the ✓ and ✖.
+
 - **`curvet agent` no longer prints the answer twice.** `run_end` carries the
   run's final text in full, and it had just been streamed word for word. The
   summary now appears only when nothing was streamed — a tool-only run, or

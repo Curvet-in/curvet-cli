@@ -179,6 +179,41 @@ describe("RunRenderer", () => {
   });
 });
 
+describe("colour", () => {
+  it("is absent when stdout is not a terminal", () => {
+    // The whole timeline is styled, so a pipe that carried escape codes would put
+    // them straight into whatever reads it. picocolors drops them on a non-TTY —
+    // which is what these tests run on, so an empty result here IS the assertion.
+    const { renderer, text } = capture();
+    renderer.handle({ type: "agent_start", agentName: "Researcher" });
+    renderer.handle({ type: "tool_result", tool: "recall", summary: "2 memories", ok: true });
+    renderer.handle({ type: "deliverable", deliverable: { title: "Report", url: "https://x/y.md" } });
+    // eslint-disable-next-line no-control-regex
+    expect(text()).not.toMatch(/\u001b\[/);
+  });
+
+  it("puts the deliverable's URL on its own line, so a double-click selects it whole", () => {
+    const { renderer, text } = capture();
+    renderer.handle({ type: "deliverable", deliverable: { title: "Report", url: "https://cdn/x.md" } });
+    renderer.finish();
+    const urlLine = text().split("\n").find((l) => l.includes("https://cdn/x.md")) ?? "";
+    expect(urlLine.trim()).toBe("https://cdn/x.md");
+  });
+
+  it("counts deliverables in words, not in (s)", () => {
+    const one = capture();
+    one.renderer.handle({ type: "deliverable", deliverable: { title: "A" } });
+    one.renderer.finish();
+    expect(one.text()).toContain("1 deliverable:");
+
+    const two = capture();
+    two.renderer.handle({ type: "deliverable", deliverable: { title: "A" } });
+    two.renderer.handle({ type: "deliverable", deliverable: { title: "B" } });
+    two.renderer.finish();
+    expect(two.text()).toContain("2 deliverables:");
+  });
+});
+
 describe("answerPause without a terminal", () => {
   it("cancels rather than approving an outward action nobody saw", async () => {
     setTTY(false);

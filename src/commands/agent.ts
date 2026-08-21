@@ -32,6 +32,45 @@ import { printJson, table, warn } from "../output.js";
 
 // ---- rendering --------------------------------------------------------------
 
+/**
+ * One palette, defined once.
+ *
+ * A run prints four different kinds of thing, and they are not equally
+ * important. The first version coloured almost all of it `dim`, which made the
+ * deliverable — the artifact you actually asked for — as faint as the run id.
+ *
+ *   agent     what the agent says.       UNSTYLED. The default foreground is the
+ *             only colour guaranteed to be readable on a light terminal and a
+ *             dark one, and this is the thing you are here to read.
+ *   artifact  what the run produced.     BOLD, with a coloured glyph. Weight
+ *             rather than hue, so it stands out on any theme.
+ *   tool      what it is doing.          Coloured, not dimmed — a timeline is
+ *             for scanning, and you scan for the tool name.
+ *   chrome    ids, timings, cost.        Grey. Present, never competing.
+ *
+ * `gray` rather than `dim`: dim is a terminal ATTRIBUTE that many themes render
+ * at very low contrast (and some ignore entirely), while gray is a real colour.
+ * Nothing here nests a colour inside `dim` either — the reset from the inner
+ * colour closes the dim span early, which is what washed out the ✓ and ✖.
+ *
+ * picocolors turns all of this off on its own when stdout is not a TTY, or when
+ * NO_COLOR is set, so piped output stays clean.
+ */
+const ui = {
+  chrome: (s: string) => pc.gray(s),
+  agentName: (s: string) => pc.bold(pc.cyan(s)),
+  tool: (s: string) => pc.cyan(s),
+  args: (s: string) => pc.gray(s),
+  ok: () => pc.green("✓"),
+  bad: () => pc.red("✖"),
+  artifact: (s: string) => pc.bold(s),
+  artifactMark: () => pc.bold(pc.yellow("◆")),
+  link: (s: string) => pc.underline(pc.cyan(s)),
+  error: (s: string) => pc.bold(pc.red(s)),
+  ask: (s: string) => pc.bold(pc.yellow(s)),
+  alarm: (s: string) => pc.bold(pc.red(s)),
+};
+
 const ICON: Record<string, string> = {
   tool_call: "→",
   tool_result: "←",
@@ -91,11 +130,11 @@ export class RunRenderer {
   handle(e: AgencyEvent): void {
     switch (e.type) {
       case "run_id":
-        if (!this.quiet) this.line(pc.dim(`run ${String(e.runId)}`));
+        if (!this.quiet) this.line(ui.chrome(`run ${String(e.runId)}`));
         break;
 
       case "run_start":
-        if (!this.quiet && e.task) this.line(pc.dim(`▸ ${String(e.task).slice(0, 200)}`));
+        if (!this.quiet && e.task) this.line(ui.chrome(`▸ ${String(e.task).slice(0, 200)}`));
         break;
 
       case "agent_start": {
@@ -103,7 +142,7 @@ export class RunRenderer {
         // Only announce a change. A single-agent run should not repeat itself.
         if (name !== this.currentAgent) {
           this.currentAgent = name;
-          if (!this.quiet) this.line(pc.cyan(`\n${name}`));
+          if (!this.quiet) this.line(ui.agentName(`\n${name}`));
         }
         break;
       }
@@ -119,19 +158,22 @@ export class RunRenderer {
       case "tool_call":
         if (!this.quiet) {
           const args = previewArgs(e.input);
-          this.line(pc.dim(`  ${ICON.tool_call} ${String(e.tool ?? "tool")}${args ? ` ${args}` : ""}`));
+          this.line(
+            `  ${ui.chrome(ICON.tool_call)} ${ui.tool(String(e.tool ?? "tool"))}${args ? ` ${ui.args(args)}` : ""}`,
+          );
         }
         break;
 
       case "tool_result":
         if (!this.quiet) {
-          const okMark = e.ok === false ? pc.red("✖") : pc.green("✓");
-          this.line(pc.dim(`  ${ICON.tool_result} ${okMark} ${String(e.summary ?? "")}`.trimEnd()));
+          const mark = e.ok === false ? ui.bad() : ui.ok();
+          const summary = String(e.summary ?? "").trim();
+          this.line(`  ${ui.chrome(ICON.tool_result)} ${mark}${summary ? ` ${ui.args(summary)}` : ""}`);
         }
         break;
 
       case "status":
-        if (!this.quiet && e.message) this.line(pc.dim(`  ${ICON.status} ${String(e.message)}`));
+        if (!this.quiet && e.message) this.line(ui.chrome(`  ${ICON.status} ${String(e.message)}`));
         break;
 
       case "deliverable":
@@ -141,7 +183,7 @@ export class RunRenderer {
             url: e.deliverable.url,
             kind: e.deliverable.kind,
           });
-          this.line(pc.magenta(`  ⬡ ${String(e.deliverable.title ?? "deliverable")}`));
+          this.line(`  ${ui.artifactMark()} ${ui.artifact(String(e.deliverable.title ?? "deliverable"))}`);
         }
         break;
 
@@ -151,8 +193,8 @@ export class RunRenderer {
         break;
 
       case "error":
-        this.line(pc.red(`✖ ${String(e.message ?? "run failed")}`));
-        if (e.retryable) this.line(pc.dim("  This looked transient — retrying may work."));
+        this.line(ui.error(`✖ ${String(e.message ?? "run failed")}`));
+        if (e.retryable) this.line(ui.chrome("  This looked transient — retrying may work."));
         break;
 
       case "run_end": {
@@ -172,7 +214,7 @@ export class RunRenderer {
           typeof e.costUsd === "number" ? `$${(e.costUsd as number).toFixed(4)}` : "",
           typeof e.creditsBilled === "number" && e.creditsBilled > 0 ? `${e.creditsBilled} credits` : "",
         ].filter(Boolean);
-        if (bits.length) this.line(pc.dim(`\n${bits.join(" · ")}`));
+        if (bits.length) this.line(ui.chrome(`\n${bits.join(" · ")}`));
         break;
       }
 
@@ -184,9 +226,13 @@ export class RunRenderer {
   finish(): void {
     this.breakStream();
     if (this.deliverables.length) {
-      this.write(pc.dim(`\n${this.deliverables.length} deliverable(s):\n`));
+      const label = this.deliverables.length === 1 ? "deliverable" : "deliverables";
+      this.write(ui.chrome(`\n${this.deliverables.length} ${label}:\n`));
       for (const d of this.deliverables) {
-        this.write(`  ${d.title}${d.url ? pc.dim(` — ${d.url}`) : ""}\n`);
+        // The URL is the whole point of this block — underlined and coloured so it
+        // reads as a link and so terminals that linkify pick it up.
+        this.write(`  ${ui.artifactMark()} ${ui.artifact(d.title)}\n`);
+        if (d.url) this.write(`    ${ui.link(d.url)}\n`);
       }
     }
   }
@@ -228,33 +274,33 @@ export async function answerPause(
   }
 
   if (pause.kind === "ask_user") {
-    process.stderr.write(pc.yellow(`? ${pause.prompt}\n`));
+    process.stderr.write(ui.ask(`? ${pause.prompt}\n`));
     if (pause.options?.length) {
-      process.stderr.write(pc.dim(`  options: ${pause.options.join("  ·  ")}\n`));
+      process.stderr.write(ui.chrome(`  options: ${pause.options.join("  ·  ")}\n`));
     }
-    const answer = await ask(pc.dim("  your answer: "));
+    const answer = await ask(ui.chrome("  your answer: "));
     // An empty answer is a real choice — the tool treats "no answer" as "proceed
     // on your best assumption and say so", which is often what you want.
     return { note: answer.trim() };
   }
 
   if (pause.kind === "plan") {
-    process.stderr.write(pc.yellow("? The agent proposed a plan:\n"));
+    process.stderr.write(ui.ask("? The agent proposed a plan:\n"));
     process.stderr.write(`${pause.prompt}\n`);
     for (const s of pause.steps ?? []) {
-      process.stderr.write(pc.dim(`  · ${s.agent}: ${s.task}\n`));
+      process.stderr.write(ui.chrome(`  · ${s.agent}: ${s.task}\n`));
     }
-    const answer = await ask(pc.dim("  approve? [Y/n] "));
+    const answer = await ask(ui.chrome("  approve? [Y/n] "));
     return /^n(o)?$/i.test(answer.trim())
       ? { decision: "cancel" }
       : { decision: "approve" };
   }
 
   // confirm — an outward or destructive action. Default is NO.
-  process.stderr.write(pc.yellow("! This action needs your approval:\n"));
+  process.stderr.write(ui.alarm("! This action needs your approval:\n"));
   process.stderr.write(`${pause.prompt}\n`);
-  if (pause.warning) process.stderr.write(pc.red(`  ${pause.warning}\n`));
-  const answer = await ask(pc.dim("  allow? [y/N] "));
+  if (pause.warning) process.stderr.write(ui.error(`  ${pause.warning}\n`));
+  const answer = await ask(ui.chrome("  allow? [y/N] "));
   return /^y(es)?$/i.test(answer.trim()) ? { decision: "approve" } : { decision: "cancel" };
 }
 
@@ -281,7 +327,7 @@ async function streamRun(
   // server reads as a disconnect. Without this the run keeps going server-side,
   // spending money nobody is watching.
   const onSigint = () => {
-    process.stderr.write(pc.dim("\n  aborting run…\n"));
+    process.stderr.write(ui.chrome("\n  aborting run…\n"));
     controller.abort();
   };
   process.on("SIGINT", onSigint);
@@ -322,12 +368,12 @@ async function streamRun(
       // whether a waiter existed. Nothing is wrong; it is just not a delivery
       // receipt, and if the run has already moved on this is the only clue.
       if (res.delivery === "published" && !opts.quiet && !opts.json) {
-        process.stderr.write(pc.dim("  sent\n"));
+        process.stderr.write(ui.chrome("  sent\n"));
       }
     }
   } catch (err) {
     if (controller.signal.aborted) {
-      process.stderr.write(pc.dim("  run aborted.\n"));
+      process.stderr.write(ui.chrome("  run aborted.\n"));
       return { runId, failed: false };
     }
     throw err;
@@ -429,7 +475,7 @@ export function agentCommand(): Command {
           // Said plainly, because the absence is confusing otherwise: the replay
           // is missing the text, not the run.
           console.log(
-            pc.dim("\n(replay — token-by-token text and cost updates are not persisted)"),
+            ui.chrome("\n(replay — token-by-token text and cost updates are not persisted)"),
           );
           return;
         }
