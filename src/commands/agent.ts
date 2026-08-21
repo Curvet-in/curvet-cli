@@ -10,7 +10,7 @@ import {
   type Curvet,
 } from "@curvet/sdk";
 import { SUPPORTED_TOOLS, execute, type ToolContext } from "../agent/tools.js";
-import { classifyPath, needsBlanketConfirm } from "../agent/permissions.js";
+import { classifyPath, needsBlanketConfirm, findProjectRoot } from "../agent/permissions.js";
 import { record as auditRecord, readRecent, auditPath } from "../agent/audit.js";
 import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { makeClient, requireCliToken } from "../client.js";
@@ -369,8 +369,11 @@ async function runLocalTool(
   runId: string,
   call: ClientToolCall,
   opts: RunOptions,
+  root: string,
 ): Promise<void> {
-  const cwd = process.cwd();
+  // The project root, not process.cwd(): running the agent from `src/` should not
+  // make `../package.json` an outside-the-project read requiring confirmation.
+  const cwd = root;
   let decision: "auto" | "confirmed" | "denied" | "declined" = "auto";
 
   const ctx: ToolContext = {
@@ -446,12 +449,53 @@ async function runLocalTool(
   });
 }
 
+/**
+ * Decide whether the agent may read from this machine, and where its boundary is.
+ *
+ * ON by default inside a project, OFF outside one. Not a compromise between
+ * convenience and safety — it is the condition the permission layer was written
+ * for. Its denylist recognises conventional names (`.env`, `*.pem`, `.ssh/`),
+ * which is close to exhaustive inside a project and nowhere near it in a home
+ * directory, where `~/notes/passwords.txt` matches nothing.
+ *
+ * The boundary is the project ROOT rather than the working directory, so running
+ * from `src/` can still read `../package.json` without asking. Running from the
+ * root reads everything under it, which is what someone pointing an agent at a
+ * repository means.
+ */
+async function resolveToolAccess(opts: RunOptions): Promise<{ enabled: boolean; root: string; why: string }> {
+  const cwd = process.cwd();
+  const root = await findProjectRoot(cwd);
+
+  if (opts.tools === false) return { enabled: false, root: cwd, why: "file access off (--no-tools)" };
+  if (opts.tools === true) {
+    return { enabled: true, root: root ?? cwd, why: root ? `project ${root}` : `${cwd} (not a project — forced with --tools)` };
+  }
+  if (root) return { enabled: true, root, why: `project ${root}` };
+  return {
+    enabled: false,
+    root: cwd,
+    why: `${cwd} is not inside a project, so file access is off. Use --tools to allow it here anyway.`,
+  };
+}
+
 async function streamRun(
   client: Curvet,
   task: string,
   opts: RunOptions,
 ): Promise<{ runId?: string; failed: boolean }> {
   const renderer = new RunRenderer(opts.quiet === true);
+  const access = await resolveToolAccess(opts);
+  if (!opts.json && !opts.quiet) {
+    // Always said out loud. Whether the agent can read this machine is the single
+    // most consequential thing about a run, and it must never have to be inferred
+    // from whether a tool call happens to appear later.
+    process.stderr.write(
+      access.enabled
+        ? ui.chrome(`reading ${access.why} · --no-tools to disable\n`)
+        : ui.chrome(`${access.why}\n`),
+    );
+  }
   const controller = new AbortController();
   let runId: string | undefined;
   let failed = false;
@@ -470,8 +514,9 @@ async function streamRun(
       task,
       modelId: opts.model,
       sessionId: opts.session,
-      // Declaring a tool is a promise to execute it, so only when asked for.
-      clientTools: opts.tools ? SUPPORTED_TOOLS : undefined,
+      // Declaring a tool is a promise to execute it, so only when this client
+      // will actually answer — see resolveToolAccess.
+      clientTools: access.enabled ? SUPPORTED_TOOLS : undefined,
       signal: controller.signal,
     });
 
@@ -494,7 +539,7 @@ async function streamRun(
         }
         // Awaited, not fired: the run is suspended on this call, and answering
         // out of order would let a later call overtake an earlier one.
-        await runLocalTool(client, runId, call, opts);
+        await runLocalTool(client, runId, call, opts, access.root);
         continue;
       }
 
@@ -568,8 +613,9 @@ export function agentCommand(): Command {
     .option("-q, --quiet", "only the agent's text — no tool timeline")
     .option("--json", "emit raw run events as JSONL, one per line")
     .option("-p, --profile <name>", "config profile")
-    .option("-t, --tools", "let the agent read files in this directory")
-    .option("--confirm-reads", "with --tools, ask before every read, not only ones outside the project")
+    .option("-t, --tools", "read files even when this is not a recognised project")
+    .option("--no-tools", "keep the agent off this machine entirely")
+    .option("--confirm-reads", "ask before every read, not only ones outside the project")
     .addHelpText(
       "after",
       [
@@ -583,14 +629,15 @@ export function agentCommand(): Command {
         "  curvet agent --runs                 # recent runs",
         "  curvet agent --replay run_abc123    # what a finished run did",
         "",
-        "By default the agent runs entirely on Curvet's servers with no access to",
-        "this machine. --tools lets it READ from the directory you are in:",
+        "Inside a project the agent can READ it — files, folders, search. Never",
+        "write, delete or run anything; those tools do not exist here.",
         "",
-        "  curvet agent --tools 'what does this project do?'",
+        "Outside a project it gets no access at all, because the rules that keep",
+        "reads safe assume a project: .env and keys live in known places there,",
+        "and in a home directory they do not. --tools overrides that.",
         "",
-        "It can read, list and search — never write, delete or run anything.",
-        "Secrets (.env, keys, .ssh, .aws) are refused before the file is opened,",
-        "and anything outside this directory asks you first, every time.",
+        "Secrets are refused before the file is opened; anything outside the",
+        "project asks you first, every time. --no-tools turns it all off, and",
         "`curvet agent --log` shows what it actually touched.",
       ].join("\n"),
     )
