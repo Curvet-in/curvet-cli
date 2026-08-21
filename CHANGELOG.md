@@ -2,6 +2,34 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.7.0
+
+- **`curvet agent --tools`** — let the agent read the project you are standing
+  in. `read_file`, `list_dir` and `grep`, executed here rather than on the
+  server: the run suspends on each call, this machine answers it, and the run
+  continues.
+
+  It cannot write, delete or run anything, and there is no way for it to ask —
+  those tools do not exist in this client yet.
+
+  The permission layer lives here and cannot be relaxed by anything the server
+  sends, because the thing being defended against is not a malicious server: it
+  is that an agent run ingests untrusted text — scraped pages, emails, a README
+  in the repo it is reading — and that text can steer tool calls.
+
+  - **Secrets are refused before the file is opened**, by path: `.env`, `*.pem`,
+    `*.key`, `.ssh/`, `.aws/`, `.npmrc`, service-account JSON. Not filtered from
+    the contents afterwards, because by then it has been read. Symlinks resolve
+    first, so a harmless-looking link to a private key is refused as well.
+  - **Anything outside the directory asks you**, every time, showing the real
+    destination rather than the name the agent used. Never remembered.
+  - **With no terminal, every prompt is a refusal** — the rule `curvet apps
+    delete` already follows.
+  - `--confirm-reads` asks about files inside the directory too.
+
+- **`curvet agent --log`** — what the agent has actually read on this machine,
+  with the decision for each. Stored on your disk rather than the server.
+
 ## 0.6.1
 
 - **`curvet agent` has a proper palette.** Fifteen of its twenty-four colour

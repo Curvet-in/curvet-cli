@@ -1,7 +1,17 @@
 import readline from "node:readline";
 import { Command } from "commander";
 import pc from "picocolors";
-import { pauseFromEvent, type AgencyEvent, type AgencyPause, type Curvet } from "@curvet/sdk";
+import {
+  pauseFromEvent,
+  clientToolCallFromEvent,
+  type AgencyEvent,
+  type AgencyPause,
+  type ClientToolCall,
+  type Curvet,
+} from "@curvet/sdk";
+import { SUPPORTED_TOOLS, execute, type ToolContext } from "../agent/tools.js";
+import { classifyPath } from "../agent/permissions.js";
+import { record as auditRecord, readRecent, auditPath } from "../agent/audit.js";
 import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { makeClient, requireCliToken } from "../client.js";
 import { printJson, table, warn } from "../output.js";
@@ -68,6 +78,7 @@ const ui = {
   link: (s: string) => pc.underline(pc.cyan(s)),
   error: (s: string) => pc.bold(pc.red(s)),
   ask: (s: string) => pc.bold(pc.yellow(s)),
+  local: (s: string) => pc.magenta(s),
   alarm: (s: string) => pc.bold(pc.red(s)),
 };
 
@@ -169,6 +180,26 @@ export class RunRenderer {
           const mark = e.ok === false ? ui.bad() : ui.ok();
           const summary = String(e.summary ?? "").trim();
           this.line(`  ${ui.chrome(ICON.tool_result)} ${mark}${summary ? ` ${ui.args(summary)}` : ""}`);
+        }
+        break;
+
+      case "client_tool_call":
+        if (!this.quiet) {
+          // Marked apart from the server's own tools: this one touched THIS
+          // machine, and that distinction is the whole point of the feature.
+          this.line(`  ${ui.local("⌂")} ${ui.local(String(e.title ?? e.name ?? "local tool"))}`);
+        }
+        break;
+
+      case "client_tool_result":
+        // Only a NON-delivery is rendered here. An ordinary failure already
+        // arrives as the server's own tool_result a moment later, and rendering
+        // both printed every local failure twice. A non-delivery is different:
+        // it means the run never heard back, which no tool_result can say.
+        if (!this.quiet && e.delivered === false) {
+          this.line(
+            ui.error(`  ${ICON.tool_result} ✖ ${String(e.name ?? "local tool")} — the run never received a result (${String(e.reason ?? "unknown")})`),
+          );
         }
         break;
 
@@ -311,6 +342,108 @@ interface RunOptions {
   session?: string;
   json?: boolean;
   quiet?: boolean;
+  /** Let the agent read files in this directory. Off unless asked for. */
+  tools?: boolean;
+  /** Confirm every local read, not just the ones that leave the project. */
+  confirmReads?: boolean;
+}
+
+/**
+ * Run one tool the agent asked for on this machine, and report what happened.
+ *
+ * Three rules, in this order, and none of them can be relaxed from the server:
+ *
+ *   1. A secret is refused before the file is opened, by path. Not filtered
+ *      afterwards — by then it has been read.
+ *   2. Anything outside the working directory is confirmed by a person, every
+ *      time. Never remembered, because "allow always" for a path the model
+ *      chooses is not a decision the user can meaningfully make in advance.
+ *   3. With no terminal, a confirmation is a REFUSAL. A piped `curvet agent`
+ *      must not read outside its project because nobody was there to object.
+ *
+ * Always answers. A refusal posted back is a fact the model can work with; a
+ * silence just costs the run its timeout and teaches it nothing.
+ */
+async function runLocalTool(
+  client: Curvet,
+  runId: string,
+  call: ClientToolCall,
+  opts: RunOptions,
+): Promise<void> {
+  const cwd = process.cwd();
+  let decision: "auto" | "confirmed" | "denied" | "declined" = "auto";
+
+  const ctx: ToolContext = {
+    cwd,
+    confirm: async (question, detail) => {
+      if (!process.stdin.isTTY) {
+        process.stderr.write(
+          warn(`${question}\n${detail ?? ""}\n  No terminal to ask — refusing.\n`),
+        );
+        return false;
+      }
+      process.stderr.write(`\n${ui.ask(`! ${question}`)}\n`);
+      if (detail) process.stderr.write(ui.chrome(`${detail}\n`));
+      const answer = await ask(ui.chrome("  allow? [y/N] "));
+      return /^y(es)?$/i.test(answer.trim());
+    },
+  };
+
+  // --confirm-reads gates everything, including reads inside the project. Off by
+  // default: the agent was pointed at this directory deliberately, and a prompt
+  // per file is a prompt people learn to hit `y` on without reading. On for
+  // anyone who would rather see each one.
+  if (opts.confirmReads) {
+    const target = String((call.rawInput as { path?: unknown }).path ?? ".");
+    const verdict = await classifyPath(cwd, target);
+    if (verdict.decision !== "deny") {
+      const allowed = await ctx.confirm(call.title, `  in ${cwd}`);
+      if (!allowed) {
+        await auditRecord({
+          at: new Date().toISOString(), runId, callId: call.toolCallId, tool: call.name,
+          title: call.title, decision: "declined", ok: false, bytes: 0, cwd,
+        });
+        await client.agency.toolResult(runId, {
+          callId: call.toolCallId,
+          ok: false,
+          error: "The user declined this read. Continue without it, or ask them for what you need.",
+        });
+        return;
+      }
+      decision = "confirmed";
+    }
+  }
+
+  const outcome = await execute(ctx, call.name, call.rawInput);
+  if (!outcome.ok && /^Refused:/.test(outcome.error ?? "")) decision = "denied";
+  else if (!outcome.ok && /declined/.test(outcome.error ?? "")) decision = "declined";
+
+  // The user should see a refusal happen, in their own terminal, in their own
+  // words — not infer it from the model's paraphrase a few seconds later.
+  if (decision === "denied" && !opts.json) {
+    process.stderr.write(ui.error(`  ⌂ refused — ${call.title} is a protected file\n`));
+  }
+
+  await auditRecord({
+    at: new Date().toISOString(),
+    runId,
+    callId: call.toolCallId,
+    tool: call.name,
+    title: call.title,
+    decision,
+    ok: outcome.ok,
+    bytes: outcome.content?.length ?? 0,
+    error: outcome.error,
+    cwd,
+  });
+
+  await client.agency.toolResult(runId, {
+    callId: call.toolCallId,
+    ok: outcome.ok,
+    content: outcome.content,
+    error: outcome.error,
+    truncated: outcome.truncated,
+  });
 }
 
 async function streamRun(
@@ -337,6 +470,8 @@ async function streamRun(
       task,
       modelId: opts.model,
       sessionId: opts.session,
+      // Declaring a tool is a promise to execute it, so only when asked for.
+      clientTools: opts.tools ? SUPPORTED_TOOLS : undefined,
       signal: controller.signal,
     });
 
@@ -349,6 +484,18 @@ async function streamRun(
         printJson(event);
       } else {
         renderer.handle(event);
+      }
+
+      const call = clientToolCallFromEvent(event);
+      if (call) {
+        if (!runId) {
+          process.stderr.write(warn("A local tool was requested but no run id arrived — cannot answer it.\n"));
+          continue;
+        }
+        // Awaited, not fired: the run is suspended on this call, and answering
+        // out of order would let a later call overtake an earlier one.
+        await runLocalTool(client, runId, call, opts);
+        continue;
       }
 
       const pause = pauseFromEvent(event);
@@ -421,6 +568,8 @@ export function agentCommand(): Command {
     .option("-q, --quiet", "only the agent's text — no tool timeline")
     .option("--json", "emit raw run events as JSONL, one per line")
     .option("-p, --profile <name>", "config profile")
+    .option("-t, --tools", "let the agent read files in this directory")
+    .option("--confirm-reads", "with --tools, ask before every read, not only ones outside the project")
     .addHelpText(
       "after",
       [
@@ -434,11 +583,19 @@ export function agentCommand(): Command {
         "  curvet agent --runs                 # recent runs",
         "  curvet agent --replay run_abc123    # what a finished run did",
         "",
-        "The agent runs entirely on Curvet's servers. It has no access to this",
-        "machine — no files, no shell — and no way to ask for any.",
+        "By default the agent runs entirely on Curvet's servers with no access to",
+        "this machine. --tools lets it READ from the directory you are in:",
+        "",
+        "  curvet agent --tools 'what does this project do?'",
+        "",
+        "It can read, list and search — never write, delete or run anything.",
+        "Secrets (.env, keys, .ssh, .aws) are refused before the file is opened,",
+        "and anything outside this directory asks you first, every time.",
+        "`curvet agent --log` shows what it actually touched.",
       ].join("\n"),
     )
     .option("--runs", "list recent runs instead of starting one")
+    .option("--log", "show what the agent has read on this machine")
     .option("--replay <runId>", "replay a finished run from history")
     .action(async (taskParts: string[], opts) => {
       const profile = await profileFor(opts);
@@ -461,6 +618,28 @@ export function agentCommand(): Command {
               ]),
             ),
           );
+          return;
+        }
+
+        if (opts.log) {
+          const entries = await readRecent(Number(opts.limit) || 50);
+          if (opts.json) return printJson(entries);
+          if (!entries.length) {
+            return console.log(warn(`Nothing recorded yet. ${auditPath()}`));
+          }
+          console.log(
+            table(
+              ["when", "tool", "what", "decision", "bytes"],
+              entries.map((e) => [
+                new Date(e.at).toLocaleString(),
+                e.tool,
+                e.title.slice(0, 44),
+                e.ok ? e.decision : `${e.decision} ✖`,
+                e.bytes ? String(e.bytes) : "",
+              ]),
+            ),
+          );
+          console.log(ui.chrome(`\n${auditPath()}`));
           return;
         }
 

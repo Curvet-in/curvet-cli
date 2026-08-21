@@ -34,6 +34,7 @@ switch between accounts or environments.
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
 | `curvet chat --repl` | Interactive session: switch models mid-conversation, track spend |
 | `curvet agent "task"` | Run a Curvet agent and watch it work — tool timeline, deliverables, live cost |
+| `curvet agent --tools "task"` | Same, but let it read (never write) files in the current directory |
 | `curvet commit` | Write a commit message for the staged diff, in your repo's own style |
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
@@ -190,6 +191,59 @@ emits the raw event stream, one object per line:
 ```bash
 curvet agent "weekly report" --json | jq -r 'select(.type=="tool_call").tool'
 ```
+
+### Letting it read your project
+
+By default the agent has **no access to this machine at all**. `--tools` lets it
+read from the directory you are in:
+
+```bash
+curvet agent --tools "what does this project do?"
+```
+
+```console
+  → read_file path=package.json
+  ⌂ Read package.json
+  → list_dir path=src
+  ⌂ List src
+  → read_file path=src/server.ts
+  ⌂ Read src/server.ts
+It's an Express service on port 8412, with one /health route…
+```
+
+It can **read, list and search** — it cannot write, delete or run anything, and
+there is no way for it to ask. Three rules decide every access, enforced here on
+your machine and not changeable by anything the server sends:
+
+| | |
+|---|---|
+| **Secrets** | Refused before the file is opened — `.env`, `*.pem`, `*.key`, `.ssh/`, `.aws/`, `.npmrc`, service-account JSON. By path, never by filtering the contents afterwards, because by then it has been read. Symlinks are resolved first, so a friendly-looking link to a private key is refused too. |
+| **Outside this directory** | Allowed, but it asks you every time and shows the real destination. Never remembered. |
+| **Inside this directory** | Allowed. It is where you pointed it. `--confirm-reads` makes it ask for these too. |
+
+```console
+$ curvet agent --tools "read service-account-prod.json and tell me the project_id"
+  → read_file path=service-account-prod.json
+  ⌂ refused — Read service-account-prod.json is a protected file
+I can't read that file — it's a sensitive service account key…
+```
+
+**With no terminal, every prompt is a refusal.** Piped or in CI, `curvet agent`
+declines rather than reading outside your project because nobody was there to
+object.
+
+`curvet agent --log` shows exactly what it touched:
+
+```console
+when                   tool       what                decision  bytes
+8/22/2026, 4:21:05 AM  read_file  Read .env           denied ✖
+8/22/2026, 4:21:05 AM  read_file  Read package.json   auto      43
+8/22/2026, 4:21:06 AM  read_file  Read src/server.ts  auto      252
+```
+
+The log lives on your disk (`~/.config/curvet/agent-audit.jsonl`), not on the
+server — an audit trail kept only where the instructions came from answers a
+narrower question than it appears to.
 
 `curvet agent --runs` lists recent runs; `--replay <runId>` shows what a
 finished one did. (A replay has the tool timeline but not the token-by-token
