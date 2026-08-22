@@ -31,6 +31,22 @@ import { promises as fs } from "node:fs";
  * at `~/.ssh/id_rsa` looks local to a string comparison, and that is precisely
  * how a path jail is defeated. The target is what gets classified, and both ends
  * are checked so a link to a secret is denied rather than merely confirmed.
+ *
+ * And it is resolved OURSELVES, component by component, rather than by handing
+ * the path to `fs.realpath`. realpath answers "where does this existing file
+ * live"; the question here is "where would this open() land", and those differ
+ * on exactly the paths that matter:
+ *
+ *   · a file that does not exist yet — every create. realpath throws ENOENT on
+ *     the missing leaf, so a fallback that judges the unresolved string never
+ *     looks at the parents at all. `escape/new.txt`, where `escape` links out of
+ *     the project, then reads as an ordinary local write.
+ *   · a DANGLING link, which points somewhere precisely because nothing is there
+ *     yet. realpath throws on the link itself, and `open(O_CREAT)` follows it and
+ *     creates the target.
+ *
+ * In both cases existence decides the boundary, which is backwards: the paths
+ * that do not exist are the writes.
  */
 
 /**
@@ -142,6 +158,84 @@ export function isInside(parent: string, child: string): boolean {
 }
 
 /**
+ * How many links one path may traverse before we call it a loop. The kernel uses
+ * a limit in this range for the same reason; the number matters less than there
+ * being one.
+ */
+const MAX_LINK_HOPS = 32;
+
+/**
+ * Where would opening `target` actually land?
+ *
+ * Walks the path one component at a time, following any symlink it meets —
+ * including a dangling one, and including links in the middle of a path whose
+ * leaf does not exist. See the note at the top of this file for why `fs.realpath`
+ * cannot answer this.
+ *
+ * `..` is applied to what has been resolved SO FAR, never to the string that was
+ * asked for, because that is what the kernel does: `link/../x` resolves relative
+ * to wherever `link` landed, not to the directory `link` sits in. Collapsing it
+ * textually first computes a path nobody will ever open.
+ *
+ * Never throws. An unreadable component simply stops the walk and is treated as
+ * an ordinary name — the caller classifies what we could resolve, and the
+ * executor reports whatever the filesystem says when it tries.
+ */
+async function resolveLinks(target: string): Promise<string> {
+  const rootOf = (p: string) => path.parse(p).root || path.sep;
+  const split = (p: string) => p.slice(rootOf(p).length).split(path.sep).filter(Boolean);
+
+  let resolved = rootOf(target);
+  const pending = split(target);
+  let hops = 0;
+
+  while (pending.length) {
+    const name = pending.shift() as string;
+    if (name === ".") continue;
+    if (name === "..") {
+      resolved = path.dirname(resolved);
+      continue;
+    }
+
+    const candidate = path.join(resolved, name);
+
+    let link: string | null = null;
+    try {
+      // lstat, not stat: we need to know the component IS a link, which stat
+      // hides by following it — and it answers for a dangling link too.
+      const info = await fs.lstat(candidate);
+      if (info.isSymbolicLink()) link = await fs.readlink(candidate);
+    } catch {
+      // Does not exist, or we may not look. Either way there is no link to
+      // follow, and the name stands as written.
+    }
+
+    if (link === null) {
+      resolved = candidate;
+      continue;
+    }
+
+    if (++hops > MAX_LINK_HOPS) {
+      // A loop, or a chain long enough to be indistinguishable from one. Return
+      // the link itself: it is inside whatever contains it, so a caller that
+      // treats this as a real path gets the conservative answer rather than a
+      // path assembled from a cycle.
+      return candidate;
+    }
+
+    // A relative link resolves against the directory the link LIVES in, which is
+    // what we have resolved so far — not against the working directory.
+    const dest = path.isAbsolute(link) ? link : path.join(resolved, link);
+    // The destination may itself contain links, so walk it rather than trusting
+    // it, and keep whatever components were still pending behind it.
+    pending.unshift(...split(dest));
+    resolved = rootOf(dest);
+  }
+
+  return resolved;
+}
+
+/**
  * Resolve a path the MODEL supplied and decide what may be done with it.
  *
  * The input is untrusted in the strict sense: it may have come from text the
@@ -152,19 +246,25 @@ export function isInside(parent: string, child: string): boolean {
  * @param request  whatever the model asked for
  */
 export async function classifyPath(cwd: string, request: string): Promise<Verdict & { abs: string }> {
-  const root = path.resolve(cwd);
-  const asked = path.resolve(root, String(request ?? ""));
+  // The project root is resolved through links too, so the two sides of the
+  // boundary check are the same kind of path. Otherwise a project reached through
+  // a link — `/tmp/x` on a Mac, where /tmp itself is a link to /private/tmp —
+  // compares an unresolved root against a resolved target, and every file in the
+  // project reads as outside it.
+  const root = await resolveLinks(path.resolve(cwd));
+  const requested = String(request ?? "");
+  const asked = path.resolve(root, requested);
 
   // Follow symlinks before deciding anything. A link inside the project that
   // points at ~/.ssh/id_rsa is inside the project only as a string.
-  let real = asked;
-  try {
-    real = await fs.realpath(asked);
-  } catch {
-    // Does not exist yet, or is unreadable. Classify what was asked for — the
-    // executor reports the missing file, and a path we cannot resolve is not a
-    // path we should quietly widen.
-  }
+  //
+  // Deliberately NOT `asked`: path.resolve collapses `..` textually, and doing
+  // that before the links are followed answers for a different path than the one
+  // that gets opened. `link/../x` lands beside wherever `link` pointed, so `..`
+  // has to be applied during the walk, once there is something to apply it to.
+  const real = await resolveLinks(
+    path.isAbsolute(requested) ? requested : `${root}${path.sep}${requested}`,
+  );
 
   // Either end being a secret is a denial: the link and its target both count.
   const reason = secretReason(real) ?? secretReason(asked);
@@ -196,6 +296,19 @@ export async function classifyPath(cwd: string, request: string): Promise<Verdic
  */
 export function needsBlanketConfirm(verdict: Verdict, confirmReads: boolean): boolean {
   return confirmReads === true && verdict.decision === "allow";
+}
+
+/** The reason out of a refusal, for showing the USER what just happened. */
+export function refusalReason(error: string | undefined): string {
+  // The executor refuses for two different reasons — a secret, or a write outside
+  // the project — and it says which. Collapsing both into one fixed phrase tells
+  // the user the wrong thing about the rule that just fired, at the moment they
+  // are deciding whether to trust the tool at all.
+  const first = String(error ?? "")
+    .replace(/^Refused:\s*/, "")
+    .split(/\.\s/)[0]
+    .trim();
+  return first || "refused by policy";
 }
 
 /**

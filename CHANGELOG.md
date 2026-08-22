@@ -2,6 +2,33 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## Unreleased
+
+- **Fixed: a write could escape the project through a symlinked parent.** The
+  boundary check resolved paths with `fs.realpath`, which throws the moment any
+  component is missing — so a path whose leaf did not exist yet was judged as the
+  literal string it arrived as, and its parents were never resolved at all. With
+  `escape` a link out of the project, `write_file` to `escape/new.txt` classified
+  as an ordinary local write. A dangling link had the same effect on its own,
+  since `open(O_CREAT)` follows one and creates the target.
+
+  Existence was deciding the boundary, which is backwards: the paths that do not
+  exist yet are exactly the writes. Paths are now resolved a component at a time,
+  following links wherever they appear, so where a write would *land* is what
+  gets classified. `..` is applied during that walk rather than collapsed
+  beforehand, because `link/../x` lands beside wherever `link` pointed.
+
+  Reads were mostly unaffected — an existing file resolved correctly — so this
+  was a write escape. Verified against a real run: a write through a symlinked
+  directory, and through a dangling link, are both refused and create nothing.
+
+- A project reached through a symlink — `/tmp/x`, where `/tmp` is itself a link
+  on macOS — no longer reports every file in it as outside the project.
+
+- One-shot mode said "is a protected file" for every refusal. A write stopped by
+  the project boundary is not a protected file, and describing it as one teaches
+  a rule that does not exist. It now prints the reason that actually fired.
+
 ## 0.10.0
 
 - **A home screen.** An empty session opens on the Curvet mark, a greeting, where
