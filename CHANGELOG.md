@@ -25,6 +25,17 @@ All notable changes to `@curvet/cli` are documented here.
 - A project reached through a symlink — `/tmp/x`, where `/tmp` is itself a link
   on macOS — no longer reports every file in it as outside the project.
 
+- **A refusal no longer arrives as the user's answer.** With no terminal to ask,
+  a pause is refused — correctly — but the refusal carried the note "no
+  interactive terminal", and the server reads a pause's note as the ANSWER. The
+  model was told *"The user answered: no interactive terminal"*: a sentence about
+  this process, attributed to a person who was never at the keyboard. A refusal
+  has no answer in it, so it no longer sends one. The explanation stays on your
+  terminal, where it already was.
+
+  Unreachable until now, because `ask_user` never actually paused in production.
+  It does now.
+
 - One-shot mode said "is a protected file" for every refusal. A write stopped by
   the project boundary is not a protected file, and describing it as one teaches
   a rule that does not exist. It now prints the reason that actually fired.

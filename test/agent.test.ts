@@ -246,6 +246,36 @@ describe("answerPause without a terminal", () => {
       raw: { type: "human_input" },
     });
     expect(answer?.decision).toBe("cancel");
-    expect(answer?.note).toMatch(/terminal/i);
+  });
+
+  it("sends NO note with a refusal, because ask_user quotes the note as the answer", async () => {
+    // This assertion used to be `expect(answer?.note).toMatch(/terminal/i)` — it
+    // asserted the bug. The server reads a pause's note as the user's answer and
+    // tells the model "The user answered: no interactive terminal", attributing a
+    // sentence about this process to a person who was never at the keyboard.
+    //
+    // A refusal has no answer in it. The decision alone says everything true, and
+    // the explanation belongs on the user's terminal, where it already is.
+    setTTY(false);
+    const answer = await answerPause({
+      kind: "ask_user",
+      key: "node-1",
+      prompt: "Which repo?",
+      raw: { type: "human_input" },
+    });
+    expect(answer?.note).toBeUndefined();
+  });
+
+  it("sends no note on a refused confirm or plan either", async () => {
+    setTTY(false);
+    for (const kind of ["confirm", "plan"] as const) {
+      const answer = await answerPause({
+        kind,
+        key: "c1",
+        prompt: "…",
+        raw: { type: kind === "plan" ? "plan_proposed" : "confirm_action" },
+      });
+      expect(answer?.note).toBeUndefined();
+    }
   });
 });
