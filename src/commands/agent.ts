@@ -473,6 +473,11 @@ async function runLocalTool(
   const outcome = await execute(ctx, call.name, call.rawInput);
   if (!outcome.ok && /^Refused:/.test(outcome.error ?? "")) decision = "denied";
   else if (!outcome.ok && /declined/.test(outcome.error ?? "")) decision = "declined";
+  // A write cannot succeed without someone approving the diff — the executor
+  // refuses outright when there is no way to ask. Recording one as "auto" would
+  // understate it in the one direction that matters when someone later asks
+  // whether a change was approved.
+  else if (outcome.ok && call.name === "write_file") decision = "confirmed";
 
   // The user should see a refusal happen, in their own terminal, in their own
   // words — not infer it from the model's paraphrase a few seconds later.

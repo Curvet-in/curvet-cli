@@ -320,6 +320,17 @@ describe("write_file", () => {
     expect(shown).toHaveLength(0);
   });
 
+  it("a successful write is never recorded as automatic", async () => {
+    // The executor refuses outright when there is no way to ask, so a write that
+    // SUCCEEDED was approved by a person. Logging it as "auto" would understate it
+    // in the one direction that matters when someone later asks who approved a
+    // change. (The decision itself is derived in the command; this pins the
+    // property it derives from: no approval, no write.)
+    const ctx = { cwd: root, confirm: async () => true } as ToolContext;
+    const out = await execute(ctx, "write_file", { path: "src/nope.ts", content: "x" });
+    expect(out.ok).toBe(false);
+  });
+
   it("insists on the complete contents rather than accepting a fragment shape", async () => {
     const { ctx } = writeCtx(true);
     const out = await execute(ctx, "write_file", { path: "src/x.ts" });
