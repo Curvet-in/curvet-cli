@@ -293,6 +293,12 @@ function ask(question: string): Promise<string> {
  * A non-TTY **refuses**, exactly as `src/confirm.ts` does and for the same
  * reason: a piped `curvet agent` must not approve a destructive action because
  * nobody was there to answer. Refusing cancels the run, which is the safe end.
+ *
+ * The note is deliberately omitted in that case. `ask_user` reads the note as the
+ * ANSWER and quotes it to the model — "The user answered: no interactive
+ * terminal" — which attributes a sentence about this process to a person who was
+ * never there, and the model then acts on it. A refusal has no answer in it; the
+ * decision alone says everything true.
  */
 export async function answerPause(
   pause: AgencyPause,
@@ -307,7 +313,7 @@ export async function answerPause(
           "  Cancelling rather than assuming an answer.\n",
       ),
     );
-    return { decision: "cancel", note: "no interactive terminal" };
+    return { decision: "cancel" };
   }
 
   if (pause.kind === "ask_user") {
