@@ -14,6 +14,7 @@ export async function runTui(opts: {
   toolsEnabled: boolean;
   model: string;
   git: { branch: string | null; files: number } | null;
+  onCommand: (name: string, arg: string) => Promise<string | null>;
 }): Promise<void> {
   const [{ render }, React, { default: App }] = await Promise.all([
     import("ink"),
@@ -21,13 +22,19 @@ export async function runTui(opts: {
     import("./App.js"),
   ]);
 
-  const instance = render(
+  // Declared first so onExit can close over it: the component needs a way to
+  // quit, and the instance does not exist until render() returns.
+  let instance: ReturnType<typeof render>;
+  // eslint-disable-next-line prefer-const
+  instance = render(
     React.createElement(App, {
       session: opts.session,
       cwd: opts.cwd,
       toolsEnabled: opts.toolsEnabled,
       model: opts.model,
       git: opts.git,
+      onCommand: opts.onCommand,
+      onExit: () => instance.unmount(),
     }),
     // The alternate screen is ink's default via its own fullscreen handling; we
     // let it own the terminal and simply wait for it to finish.

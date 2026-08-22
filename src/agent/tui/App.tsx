@@ -3,6 +3,8 @@ import { Box, Text, useApp, useInput, useStdout } from "ink";
 import path from "node:path";
 import type { AgentSession, SessionState, Approval, Entry } from "../session.js";
 import type { DiffLine } from "../diff.js";
+import { CURVET_MARK, MARK_WIDTH } from "./mark.js";
+import { COMMANDS, completions, helpText, isCommand, parseCommand } from "../commands.js";
 
 /**
  * The full-screen session.
@@ -39,6 +41,9 @@ interface Props {
   model: string;
   /** Branch and changed-file count, when this is a git repo. */
   git: { branch: string | null; files: number } | null;
+  /** Run a slash command. Returns text to show, or null when it handled itself. */
+  onCommand: (name: string, arg: string) => Promise<string | null>;
+  onExit: () => void;
 }
 
 /**
@@ -189,7 +194,7 @@ function ApprovalPrompt({ pending, width }: { pending: Approval; width: number }
   );
 }
 
-export default function App({ session, cwd, toolsEnabled, model, git }: Props) {
+export default function App({ session, cwd, toolsEnabled, model, git, onCommand, onExit }: Props) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, setState] = useState<SessionState>(() => session.snapshot());
@@ -217,12 +222,38 @@ export default function App({ session, cwd, toolsEnabled, model, git }: Props) {
   const width = cols - 2;
 
   const answering = state.pending?.kind === "ask_user";
+  const matches = answering ? [] : completions(input);
 
   const submit = (text: string) => {
     const trimmed = text.trim();
     setInput("");
-    if (answering) session.answer(true, trimmed);
-    else if (trimmed) void session.send(trimmed);
+    if (!trimmed) return;
+    // While answering a question, a leading slash is just text — someone asked
+    // for a path and it starts with one.
+    if (answering) {
+      session.answer(true, trimmed);
+      return;
+    }
+    if (isCommand(trimmed)) {
+      const { name, arg, known } = parseCommand(trimmed);
+      if (!known) {
+        session.note(`/${name} is not a command. Type / to see what is.`);
+        return;
+      }
+      if (name === "exit") {
+        onExit();
+        return;
+      }
+      if (name === "help") {
+        session.note(helpText());
+        return;
+      }
+      void onCommand(name, arg).then((reply) => {
+        if (reply) session.note(reply);
+      });
+      return;
+    }
+    void session.send(trimmed);
   };
 
   useInput((char, key) => {
@@ -271,6 +302,15 @@ export default function App({ session, cwd, toolsEnabled, model, git }: Props) {
         }
       } else if (e.kind === "agent") {
         for (const l of wrap(e.text, width)) out.push(<Text key={`${e.id}-${out.length}`}>{l}</Text>);
+      } else if (e.kind === "note") {
+        // The client talking, not the agent. Grey so it never reads as an answer.
+        for (const l of wrap(e.text, width)) {
+          out.push(
+            <Text key={`${e.id}-${out.length}`} color="gray">
+              {l}
+            </Text>,
+          );
+        }
       } else {
         out.push(<ToolEntry key={e.id} entry={e} width={width} />);
       }
@@ -292,13 +332,23 @@ export default function App({ session, cwd, toolsEnabled, model, git }: Props) {
     <Box flexDirection="column" width={cols} height={rows}>
       <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
         {lines.length === 0 ? (
-          <Box flexDirection="column">
+          <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center">
+            {/* The mark only when there is room for it. On a short window the
+                greeting matters more than the picture. */}
+            {rows >= 18 && cols >= MARK_WIDTH + 4
+              ? CURVET_MARK.map((l, i) => (
+                  <Text key={i} color="cyan">
+                    {l}
+                  </Text>
+                ))
+              : null}
+            <Box marginTop={1}>
+              <Text bold>What can I do for you?</Text>
+            </Box>
             <Text color="gray">
-              {toolsEnabled
-                ? `Reading and editing ${project}. Every change is shown before it is made.`
-                : "No file access here — run inside a project, or pass --tools."}
+              {toolsEnabled ? `reading and editing ${project}` : "no file access here — pass --tools"}
             </Text>
-            <Text color="gray">Esc stops a turn · Ctrl-C leaves</Text>
+            <Text color="gray">/ for commands · esc stops a turn · ctrl-c leaves</Text>
           </Box>
         ) : (
           lines
@@ -307,6 +357,19 @@ export default function App({ session, cwd, toolsEnabled, model, git }: Props) {
 
       <Box flexDirection="column" flexShrink={0} paddingX={1}>
         {state.error ? <Text color="red">{state.error}</Text> : null}
+
+        {/* The picker. Typing `/` alone lists everything, which is how anyone
+            discovers what exists — and the reason the list is kept short. */}
+        {!state.pending && matches.length > 0 ? (
+          <Box flexDirection="column">
+            {matches.slice(0, 6).map((c) => (
+              <Text key={c.name}>
+                <Text color="cyan">{`/${c.name}${c.arg ? ` ${c.arg}` : ""}`.padEnd(18)}</Text>
+                <Text color="gray">{c.summary}</Text>
+              </Text>
+            ))}
+          </Box>
+        ) : null}
 
         {state.pending ? (
           <ApprovalPrompt pending={state.pending} width={width} />

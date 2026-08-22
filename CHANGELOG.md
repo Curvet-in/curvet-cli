@@ -4,6 +4,22 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## 0.10.0
 
+- **A home screen.** An empty session opens on the Curvet mark, a greeting, and
+  where you are — rather than a blank transcript that gives no clue what to type.
+
+- **Slash commands.** `/` lists them; typing narrows. Everything offered actually
+  works, because a picker listing something the session answers "not implemented"
+  to is worse than no picker.
+
+  `/status` asks the SERVER what it has enabled — agents, memory, connectors,
+  plan approval — rather than printing what the client assumed at startup. The
+  two drift, and the client's copy is the one that is wrong.
+
+  `/model` switches the orchestrator mid-session · `/tools` says what the agent
+  may do on this machine · `/cost`, `/runs`, `/log`, `/undo`, `/clear`, `/help`,
+  `/exit`.
+
+
 - **`curvet agent` with no task opens a full-screen session.** Multi-turn, so a
   follow-up can say "now change that one" and be understood. Panes for the
   conversation, the tool timeline and the last diff, with the model, turn count,

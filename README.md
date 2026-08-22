@@ -172,6 +172,25 @@ Done — updated 8412 → 9300.
 claude-sonnet-4-6 · $0.14 · 2 turns · demo-proj  ⎇ main 3 changed
 ```
 
+An empty session opens on a home screen — the mark, where you are, and what to
+press. `/` lists the commands:
+
+```
+/help             what these commands do
+/model [id]       show or switch the orchestrator model
+/status           what this server has enabled — agents, memory, connectors
+/tools            what the agent may do on this machine
+/cost             what this session has spent
+/runs             recent runs on your account
+/log              what the agent has read and written here
+/undo             put back the files this session changed
+/clear            start a fresh conversation, keeping the window
+/exit             leave
+```
+
+`/status` asks the server rather than reciting what the client assumed when it
+started.
+
 Tool calls appear in the conversation at the point the agent made them. Diffs are
 approved where the input is — `y` applies, `n` declines. Esc stops a turn,
 Ctrl-C leaves. The bottom line always tells you the model, the spend, where you

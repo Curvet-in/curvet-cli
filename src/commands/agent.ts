@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import path from "node:path";
 import { Command } from "commander";
 import pc from "picocolors";
 import {
@@ -508,6 +509,105 @@ async function runLocalTool(
 }
 
 /**
+ * Run one slash command, returning what to show in the transcript.
+ *
+ * Anything that reports SERVER state asks the server rather than printing what
+ * the client assumed when it started: the two drift, and the client's copy is
+ * the one that is wrong. `null` means the command handled itself and there is
+ * nothing to say.
+ */
+async function runSlashCommand(o: {
+  name: string;
+  arg: string;
+  session: import("../agent/session.js").AgentSession;
+  client: Curvet;
+  cwd: string;
+  access: { enabled: boolean; root: string; why: string };
+}): Promise<string | null> {
+  const { name, arg, session, client, cwd, access } = o;
+
+  if (name === "clear") {
+    session.clear();
+    return null;
+  }
+
+  if (name === "model") {
+    if (!arg) {
+      const s = session.snapshot();
+      return s.model ? `model: ${s.model}` : "model: whichever the server picks (auto)";
+    }
+    session.setModel(arg);
+    return `model: ${arg} — from the next turn on`;
+  }
+
+  if (name === "cost") {
+    const s = session.snapshot();
+    return s.costUsd > 0
+      ? `$${s.costUsd.toFixed(4)} across ${s.turns} turn${s.turns === 1 ? "" : "s"}`
+      : "nothing spent yet";
+  }
+
+  if (name === "tools") {
+    if (!access.enabled) return `no file access — ${access.why}`;
+    return [
+      `reading and editing ${access.root}`,
+      "  read_file, list_dir, grep, write_file — every write shown as a diff first",
+      "  secrets are refused before opening; writes outside the project are refused",
+    ].join("\n");
+  }
+
+  if (name === "status") {
+    try {
+      const s = (await client.agency.status()) as Record<string, unknown>;
+      return [
+        `orchestrator: ${s.orchestratorModel}`,
+        `agents: ${s.agents}`,
+        `memory: ${s.persistentMemory ? "on" : "off"} · connectors: ${s.connectors ? "on" : "off"}`,
+        `plan approval: ${s.planApproval ? "on" : "off"} · scheduling: ${s.scheduling ? "on" : "off"}`,
+      ].join("\n");
+    } catch (err) {
+      return `could not reach the server: ${(err as Error).message}`;
+    }
+  }
+
+  if (name === "runs") {
+    try {
+      const runs = await client.agency.list();
+      if (!runs.length) return "no runs yet";
+      return runs
+        .slice(0, 8)
+        .map((r) => `${r.runId}  ${(r.task ?? "").slice(0, 46)}`)
+        .join("\n");
+    } catch (err) {
+      return `could not list runs: ${(err as Error).message}`;
+    }
+  }
+
+  if (name === "log") {
+    const entries = await readRecent(12);
+    if (!entries.length) return "nothing read or written on this machine yet";
+    return entries
+      .map((e) => `${e.ok ? "✓" : "✖"} ${e.tool.padEnd(11)} ${e.title.slice(0, 40)}  ${e.decision}`)
+      .join("\n");
+  }
+
+  if (name === "undo") {
+    const runId = arg || (await lastRunWithWrites());
+    if (!runId) return "nothing to undo — no files have been changed";
+    const result = await undoRun(runId);
+    const parts = [
+      ...result.restored.map((f) => `restored ${path.relative(cwd, f) || f}`),
+      ...result.deleted.map((f) => `removed ${path.relative(cwd, f) || f}`),
+      ...result.failed.map((f) => `could not undo ${f.file} — ${f.why}`),
+      ...result.changedSince.map((f) => `note: ${path.relative(cwd, f) || f} had been edited since`),
+    ];
+    return parts.length ? parts.join("\n") : `run ${runId} did not write anything`;
+  }
+
+  return `/${name} is not wired up yet.`;
+}
+
+/**
  * Decide whether the agent may read from this machine, and where its boundary is.
  *
  * ON by default inside a project, OFF outside one. Not a compromise between
@@ -818,6 +918,8 @@ export function agentCommand(): Command {
             toolsEnabled: access.enabled,
             model: opts.model ?? "auto",
             git: await repoStatus(access.root),
+            onCommand: (name, arg) =>
+              runSlashCommand({ name, arg, session, client, cwd: access.root, access }),
           });
           return;
         }

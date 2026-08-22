@@ -34,6 +34,12 @@ export type SessionStatus = "idle" | "thinking" | "awaiting-approval" | "abortin
 export type Entry =
   | { kind: "user"; id: string; text: string }
   | { kind: "agent"; id: string; text: string }
+  /**
+   * Something the CLIENT is telling you — a slash command's answer. Deliberately
+   * a separate kind: it is not the agent speaking, it must not look as though it
+   * is, and it must never go up as conversation history.
+   */
+  | { kind: "note"; id: string; text: string }
   | {
       kind: "tool";
       id: string;
@@ -137,6 +143,22 @@ export class AgentSession {
   private patch(next: Partial<SessionState>): void {
     Object.assign(this.state, next);
     this.emit();
+  }
+
+  /** Say something to the user in the transcript, from the client rather than the agent. */
+  note(text: string): void {
+    this.addEntry({ kind: "note", id: `n_${Date.now()}_${this.state.entries.length}`, text });
+  }
+
+  /** Start a fresh conversation. The window, the spend and the audit trail stay. */
+  clear(): void {
+    this.patch({ entries: [], streaming: "", error: null });
+  }
+
+  /** Switch the orchestrator model for subsequent turns. */
+  setModel(model: string | undefined): void {
+    this.opts.model = model;
+    this.patch({ model: model ?? null });
   }
 
   /** Answer whatever the session is parked on. No-op when it is not parked. */
