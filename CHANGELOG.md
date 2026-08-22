@@ -2,6 +2,43 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.10.0
+
+- **`curvet agent` with no task opens a full-screen session.** Multi-turn, so a
+  follow-up can say "now change that one" and be understood. Panes for the
+  conversation, the tool timeline and the last diff, with the model, turn count,
+  live cost and elapsed time in the header.
+
+  ```
+  ┌─ curvet agent ─────────────── auto · 2 turns · $0.14 · 0m53s ─┐
+  │ › read src/server.ts and tell me the port │ ✓ Read src/server.ts │
+  │ The server listens on port 8412.          │ ✓ Write src/server…  │
+  │ › now change that port to 9300            ├──────────────────────┤
+  │ Done — updated 8412 → 9300.               │ - const PORT = 8412; │
+  │                                           │ + const PORT = 9300; │
+  ```
+
+  Approvals happen inside it: a diff appears in the prompt and `y` applies it.
+  Esc stops a turn, Ctrl-C leaves.
+
+  A task on the command line still runs one-shot and inline, unchanged — that is
+  what pipes and CI use, and it should not open a UI. `--json` is unchanged too.
+
+  ink is loaded through a dynamic import, so nothing else pays for React: only a
+  session actually loads it.
+
+- The session engine holds no rendering at all. That is what makes an approval
+  work in a full-screen app — it is state the UI subscribes to, rather than a
+  question written to stderr — and it is what a desktop client would reuse.
+
+- **Pasting into the input works.** A paste arrives as one chunk rather than as
+  keystrokes, and a trailing newline now submits instead of landing in the buffer
+  as an invisible character that could never be typed out.
+
+- **A terminal reporting a zero window size no longer renders an invisible UI.**
+  Some CI runners and multiplexers report 0 rather than nothing, and `?? 80` does
+  not catch 0. Narrow terminals drop the side pane instead of squeezing both.
+
 ## 0.9.0
 
 - **`curvet login` now asks which scopes you want.** Before this, the only way to

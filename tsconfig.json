@@ -9,6 +9,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    // The full-screen session (src/agent/tui) is ink, i.e. React. Automatic
+    // runtime so no file needs to import React just to use JSX.
+    "jsx": "react-jsx",
     "noEmit": true,
     "types": ["node"]
   },

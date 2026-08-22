@@ -665,7 +665,7 @@ function explainScope(err: unknown): never {
 export function agentCommand(): Command {
   const agent = new Command("agent")
     .description("run a Curvet agent and watch it work")
-    .argument("[task...]", "what you want done")
+    .argument("[task...]", "what you want done; omit it for an interactive session")
     .option("-m, --model <id>", "orchestrator model id")
     .option("-s, --session <id>", "continue a previous session")
     .option("-q, --quiet", "only the agent's text — no tool timeline")
@@ -681,6 +681,7 @@ export function agentCommand(): Command {
         "Needs the agency:run scope:  curvet login --scope agency:run",
         "",
         "Examples:",
+        "  curvet agent                        # full-screen session, multi-turn",
         "  curvet agent 'summarise my unread email'",
         "  curvet agent 'draft a launch post' --model claude-sonnet-4-6",
         "  curvet agent 'weekly report' --json | jq -r 'select(.type==\"tool_call\").tool'",
@@ -788,10 +789,35 @@ export function agentCommand(): Command {
         }
 
         const task = taskParts.join(" ").trim();
+
+        // No task means a SESSION: the full-screen, multi-turn shape. A task on
+        // the command line stays one-shot and inline, because that is what pipes
+        // and CI use and it should not open a UI.
         if (!task) {
-          throw new Error(
-            "Tell the agent what to do:  curvet agent 'summarise my unread email'",
-          );
+          if (!process.stdin.isTTY) {
+            throw new Error(
+              "Tell the agent what to do:  curvet agent 'summarise my unread email'\n" +
+                "  (an interactive session needs a terminal)",
+            );
+          }
+          const access = await resolveToolAccess(opts);
+          const { AgentSession } = await import("../agent/session.js");
+          const { runTui } = await import("../agent/tui/index.js");
+          const session = new AgentSession({
+            client,
+            cwd: access.root,
+            toolsEnabled: access.enabled,
+            confirmReads: opts.confirmReads === true,
+            model: opts.model,
+            sessionId: opts.session,
+          });
+          await runTui({
+            session,
+            cwd: access.root,
+            toolsEnabled: access.enabled,
+            model: opts.model ?? "auto",
+          });
+          return;
         }
 
         const { failed } = await streamRun(client, task, opts);

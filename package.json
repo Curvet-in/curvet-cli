@@ -40,11 +40,14 @@
     "@curvet/sdk": "^0.11.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "commander": "^12.1.0",
+    "ink": "^7.1.1",
     "picocolors": "^1.1.1",
+    "react": "^19.2.8",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",
+    "@types/react": "^19.2.18",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
