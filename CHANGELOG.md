@@ -2,6 +2,72 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.9.0
+
+- **`curvet login` now asks which scopes you want.** Before this, the only way to
+  discover `agency:run` was to run an agent, be refused, and read the error —
+  `--scope <scope>` never said which scopes exist, and the defaults are apps-only.
+
+  ```
+  Signing in will let this device:
+    · see your apps and their usage
+    · create, configure and delete your apps
+    · rotate your app keys and read your app secrets
+
+  Anything else?
+    [1] run agents as you — spending your credits, and using tools that can send email…
+        agency:run — needed for `curvet agent`
+    [2] administer your organization, including minting enterprise API keys
+        enterprise:admin — org admins only
+
+    numbers to add, or Enter for none:
+  ```
+
+  Skipped when `--scope` or `--all` is given, and when there is no terminal — a
+  scripted login must not block on a question, and silence is not consent to a
+  wider token.
+
+  `curvet login --help` lists every scope and what it is for, `--all` takes the
+  lot, and an unknown `--scope` now names the valid ones instead of failing at
+  the server.
+
+- **`curvet login` on an already-signed-in device says what it cannot do**, and
+  gives the command that fixes it. That is the moment people look for this: they
+  ran `login` again because something refused them, and used to get "already
+  signed in" with no way forward.
+
+- **`curvet auth status` verifies the login instead of trusting the file.** The
+  table read local config, so a token revoked from another machine — or replaced
+  by a later login — still showed as "signed in". It now asks the server, shows
+  which scopes the token actually holds, and names the ones it does not.
+
+
+- **`write_file`** — the agent can now change files in your project, and every
+  change is shown as a diff you approve before anything is written. There is no
+  auto-approve, no "allow always", and no flag to add one: what you are approving
+  is different every time, because it is the diff, not the capability.
+
+  Only what changed is printed, with three lines either side. A prompt long
+  enough to scroll is a prompt that gets approved unread.
+
+  **Writes outside the project are refused, not confirmed.** Reading a sibling
+  package is ordinary work in a monorepo; writing to one is not something an
+  agent pointed at this repository should be doing, and a prompt would only be a
+  way to say yes to it at 2am. Secrets are refused as before — it never asks.
+
+  With no terminal, a write is refused. Piped or in CI, nothing gets written.
+
+- **`curvet agent --undo`** — put back the files the agent changed. Every write
+  saves the previous contents first, so undo exists before the first regret, and
+  a file written twice in one run returns to how it looked *before the run*
+  rather than to its state midway through.
+
+  If you edited a file yourself after the agent wrote it, undo still restores it
+  — you asked — but it says so rather than quietly overwriting your work.
+
+  Deliberately not `git stash`: that mutates a repository you are also using,
+  mid-session, and does nothing at all outside a git repo.
+
 ## 0.8.0
 
 - **Reading your project is now the default.** `curvet agent` inside a project

@@ -10,6 +10,7 @@ import {
   findProjectRoot,
 } from "../src/agent/permissions.js";
 import { execute, type ToolContext } from "../src/agent/tools.js";
+import type { FileDiff } from "../src/agent/diff.js";
 
 /**
  * The permission layer.
@@ -213,6 +214,131 @@ describe("findProjectRoot", () => {
   });
 });
 
+describe("write_file", () => {
+  /** A context that can write, recording what it was shown. */
+  function writeCtx(approve: boolean) {
+    const shown: { path: string; added: number; removed: number; creating: boolean }[] = [];
+    const backups: { file: string; original: string | null }[] = [];
+    return {
+      shown,
+      backups,
+      ctx: {
+        cwd: root,
+        confirm: async () => approve,
+        confirmWrite: async (p: string, d: FileDiff, creating: boolean) => {
+          shown.push({ path: p, added: d.added, removed: d.removed, creating });
+          return approve;
+        },
+        backup: async (file: string, original: string | null) => {
+          backups.push({ file, original });
+        },
+      } as ToolContext,
+    };
+  }
+
+  it("shows a diff and writes when approved", async () => {
+    const { ctx, shown } = writeCtx(true);
+    const target = path.join(root, "src", "written.ts");
+    const out = await execute(ctx, "write_file", { path: "src/written.ts", content: "export const a = 1;\n" });
+    expect(out.ok).toBe(true);
+    expect(shown).toHaveLength(1);
+    expect(shown[0].creating).toBe(true);
+    expect(await fs.readFile(target, "utf8")).toBe("export const a = 1;\n");
+    await fs.unlink(target);
+  });
+
+  it("writes NOTHING when declined", async () => {
+    const { ctx } = writeCtx(false);
+    const target = path.join(root, "src", "declined.ts");
+    const out = await execute(ctx, "write_file", { path: "src/declined.ts", content: "nope" });
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/declined/);
+    await expect(fs.access(target)).rejects.toThrow();
+  });
+
+  it("tells the model not to retry a declined write with a variation", async () => {
+    // Otherwise a refusal becomes a negotiation, and the user gets asked four
+    // times about the same change in slightly different words.
+    const { ctx } = writeCtx(false);
+    const out = await execute(ctx, "write_file", { path: "src/x.ts", content: "y" });
+    expect(out.error).toMatch(/Do not try again/i);
+  });
+
+  it("cannot write at all without a way to ask", async () => {
+    // Absent confirmWrite means writes are impossible, never automatic.
+    const ctx = { cwd: root, confirm: async () => true } as ToolContext;
+    const out = await execute(ctx, "write_file", { path: "src/sneaky.ts", content: "x" });
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/cannot write/i);
+  });
+
+  it("never writes a secret, and never even asks", async () => {
+    const { ctx, shown } = writeCtx(true);
+    const out = await execute(ctx, "write_file", { path: ".env", content: "API_KEY=hijacked" });
+    expect(out.ok).toBe(false);
+    expect(shown).toHaveLength(0);
+    expect(await fs.readFile(path.join(root, ".env"), "utf8")).toContain("super-secret-value");
+  });
+
+  it("DENIES a write outside the project rather than confirming it", async () => {
+    // Reading a sibling package is ordinary work. Writing to one is not something
+    // an agent pointed at this repository should do, and a prompt would only be a
+    // way to say yes to it at 2am.
+    const { ctx, shown } = writeCtx(true);
+    const out = await execute(ctx, "write_file", { path: "../elsewhere/notes.md", content: "overwritten" });
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/outside this project/);
+    expect(shown).toHaveLength(0);
+    expect(await fs.readFile(path.join(outside, "notes.md"), "utf8")).toContain("sibling file");
+  });
+
+  it("preserves the previous contents before overwriting", async () => {
+    const { ctx, backups } = writeCtx(true);
+    const target = path.join(root, "src", "index.ts");
+    const before = await fs.readFile(target, "utf8");
+    await execute(ctx, "write_file", { path: "src/index.ts", content: "export const hello = 2;\n" });
+    expect(backups).toHaveLength(1);
+    expect(backups[0].original).toBe(before);
+    await fs.writeFile(target, before);
+  });
+
+  it("records a creation as having no previous contents, so undo deletes it", async () => {
+    const { ctx, backups } = writeCtx(true);
+    const target = path.join(root, "src", "fresh.ts");
+    await execute(ctx, "write_file", { path: "src/fresh.ts", content: "new\n" });
+    expect(backups[0].original).toBeNull();
+    await fs.unlink(target);
+  });
+
+  it("does not stage a prompt for a write that changes nothing", async () => {
+    // A confirmation with an empty diff teaches people that prompts are noise.
+    const { ctx, shown } = writeCtx(true);
+    const before = await fs.readFile(path.join(root, "src", "index.ts"), "utf8");
+    const out = await execute(ctx, "write_file", { path: "src/index.ts", content: before });
+    expect(out.ok).toBe(true);
+    expect(out.content).toMatch(/already has exactly these contents/);
+    expect(shown).toHaveLength(0);
+  });
+
+  it("a successful write is never recorded as automatic", async () => {
+    // The executor refuses outright when there is no way to ask, so a write that
+    // SUCCEEDED was approved by a person. Logging it as "auto" would understate it
+    // in the one direction that matters when someone later asks who approved a
+    // change. (The decision itself is derived in the command; this pins the
+    // property it derives from: no approval, no write.)
+    const ctx = { cwd: root, confirm: async () => true } as ToolContext;
+    const out = await execute(ctx, "write_file", { path: "src/nope.ts", content: "x" });
+    expect(out.ok).toBe(false);
+  });
+
+  it("insists on the complete contents rather than accepting a fragment shape", async () => {
+    const { ctx } = writeCtx(true);
+    const out = await execute(ctx, "write_file", { path: "src/x.ts" });
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/complete new contents/);
+  });
+});
+
 describe("needsBlanketConfirm", () => {
   it("asks only about reads that would otherwise pass silently", async () => {
     const inside = await classifyPath(root, "src/index.ts");
@@ -296,9 +422,11 @@ describe("the executors enforce it", () => {
   });
 
   it("refuses a tool it does not implement rather than pretending", async () => {
-    const out = await execute(ctxWith(true), "write_file", { path: "x", content: "y" });
-    expect(out.ok).toBe(false);
-    expect(out.error).toMatch(/cannot run/);
+    for (const name of ["run_command", "delete_file", "apply_patch"]) {
+      const out = await execute(ctxWith(true), name, { path: "x" });
+      expect(out.ok, name).toBe(false);
+      expect(out.error, name).toMatch(/cannot run/);
+    }
   });
 
   it("reports a missing file as a fact, not a crash", async () => {

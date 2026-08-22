@@ -2,6 +2,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { Curvet } from "@curvet/sdk";
 import { loadConfig, saveConfig, resolveProfile, configPath } from "../config.js";
+import { makeClient } from "../client.js";
 import { maskKey, ok, warn, fail, printJson, table } from "../output.js";
 
 /** Prompt for a secret on a TTY without echoing it. */
@@ -188,6 +189,39 @@ export function authCommand(): Command {
         ];
       });
       console.log(table(["PROFILE", "APP KEY", "ENTERPRISE KEY", "LOGIN", "BASE URL"], rows));
+
+      // The table above reads a FILE. Whether that token still works is a
+      // different question, and the file cannot answer it — a token revoked from
+      // another machine, or rotated by a later login, still sits there looking
+      // like a login. So ask, and say what it can actually do.
+      if (active.cliToken) {
+        try {
+          const me = await makeClient(active).auth.whoami();
+          const days = me.device.expiresAt
+            ? Math.round((Date.parse(me.device.expiresAt) - Date.now()) / 86_400_000)
+            : null;
+          console.log(
+            `\n${ok(`signed in as ${pc.bold(me.user.email)}`)}` +
+              pc.dim(`  ${me.device.deviceName || "unnamed"}${days != null ? ` · expires in ${days} days` : ""}`),
+          );
+          console.log(pc.dim(`  can: ${me.scopes.join(", ")}`));
+          const missing = (me.allScopes ?? []).filter((s) => !me.scopes.includes(s));
+          if (missing.length) {
+            console.log(
+              pc.dim(
+                `  cannot: ${missing.join(", ")}\n` +
+                  `  add with: curvet login --force --scope ${missing.join(" --scope ")}`,
+              ),
+            );
+          }
+        } catch {
+          console.log(
+            `\n${warn("this profile has a login token, but the server rejected it")}` +
+              pc.dim("\n  It was revoked, or replaced by a later login. Run `curvet login` again."),
+          );
+        }
+      }
+
       for (const [field, source] of Object.entries(active.sources)) {
         if (source === "env") {
           console.log(

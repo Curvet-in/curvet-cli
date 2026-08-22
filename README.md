@@ -177,9 +177,10 @@ outward action to confirm. It asks here, and waits.
   your answer: curvet-cli
 ```
 
-**The agent runs on Curvet's servers.** The only thing it can do on this machine
-is read the project you are standing in, under the rules below — it cannot write,
-delete or run anything, and there is no way for it to ask.
+**The agent runs on Curvet's servers.** On this machine it can read the project
+you are standing in and change files in it — every change shown as a diff you
+approve first. It cannot delete or run anything, and there is no way for it to
+ask.
 
 **With no terminal, a pause is cancelled — never approved.** Piped or in CI,
 `curvet agent` stops rather than rubber-stamping an action nobody saw, the same
@@ -222,8 +223,10 @@ The boundary is the project **root**, so running from `src/` still reads
 It's an Express service on port 8412, with one /health route…
 ```
 
-It can **read, list and search** — it cannot write, delete or run anything, and
-there is no way for it to ask. Three rules decide every access, enforced here on
+It can **read, list, search and write** — it cannot delete or run anything, and
+there is no way for it to ask. Every write is shown as a diff first.
+
+Three rules decide every access, enforced here on
 your machine and not changeable by anything the server sends:
 
 | | |
@@ -242,6 +245,38 @@ I can't read that file — it's a sensitive service account key…
 **With no terminal, every prompt is a refusal.** Piped or in CI, `curvet agent`
 declines rather than reading outside your project because nobody was there to
 object.
+
+### Changing files
+
+The agent can edit your project, and you see every change before it happens:
+
+```console
+! Change src/server.ts  +1 −1
+  ┄
+    1   import express from "express";
+    2 - const PORT = 8412;
+    2 + const PORT = 9000;
+    3   const CODENAME = "KESTREL-9922";
+  apply? [y/N]
+```
+
+Only what changed is shown, with a little context. **There is no auto-approve and
+no flag to add one** — what you are approving is different every time, because it
+is the diff and not the capability.
+
+Writes outside the project are **refused**, not confirmed. Secrets are refused as
+always. With no terminal nothing is written at all.
+
+Changed your mind:
+
+```bash
+curvet agent --undo          # the last run that wrote anything
+curvet agent --undo run_abc  # a specific one
+```
+
+Every write saves the previous contents first. A file written twice in one run
+goes back to how it looked *before the run*. If you edited a file yourself after
+the agent wrote it, undo still restores it — you asked — but it tells you.
 
 `curvet agent --log` shows exactly what it touched:
 
@@ -427,11 +462,39 @@ things an app key cannot do, because an app key authenticates an *app*, and
 letting one mint or rotate another would make revoking it meaningless.
 
 ```bash
-curvet login                              # opens a browser, prints a code
-curvet login --scope enterprise:admin     # also administer your org
+curvet login                              # asks what to allow, opens a browser
+curvet login --scope agency:run           # allow `curvet agent`, no prompt
+curvet login --all                        # every scope, no prompt
 curvet login --no-browser                 # over SSH or in a container
 curvet logout
 ```
+
+It asks before it opens anything, because the defaults are apps-only and the
+scope `curvet agent` needs is not among them:
+
+```console
+Signing in will let this device:
+  · see your apps and their usage
+  · create, configure and delete your apps
+  · rotate your app keys and read your app secrets
+
+Anything else?
+  [1] run agents as you — spending your credits, and using tools that can send email…
+      agency:run — needed for `curvet agent`
+  [2] administer your organization, including minting enterprise API keys
+      enterprise:admin — org admins only
+
+  numbers to add, or Enter for none:
+```
+
+`agency:run` is kept out of the default deliberately: it is the only grant that
+spends money on its own, so a token minted to rotate an app key should not also
+be able to run agents. That is a reason to leave it out of the default, not a
+reason to hide it — `curvet login --help` lists every scope, and `curvet auth
+status` shows which ones your token actually holds.
+
+With no terminal — piped, or in CI — nothing is asked and nothing extra is
+granted. Use `--scope` there.
 
 ```console
 $ curvet login
