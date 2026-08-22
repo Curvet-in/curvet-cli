@@ -11,10 +11,12 @@ import {
 } from "@curvet/sdk";
 import { SUPPORTED_TOOLS, execute, type ToolContext } from "../agent/tools.js";
 import { classifyPath, needsBlanketConfirm, findProjectRoot } from "../agent/permissions.js";
+import type { FileDiff } from "../agent/diff.js";
+import { saveBackup, undoRun, lastRunWithWrites } from "../agent/backup.js";
 import { record as auditRecord, readRecent, auditPath } from "../agent/audit.js";
 import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { makeClient, requireCliToken } from "../client.js";
-import { printJson, table, warn } from "../output.js";
+import { fail, ok, printJson, table, warn } from "../output.js";
 
 /**
  * `curvet agent` — run a Curvet agent from the terminal and watch it work.
@@ -79,6 +81,9 @@ const ui = {
   error: (s: string) => pc.bold(pc.red(s)),
   ask: (s: string) => pc.bold(pc.yellow(s)),
   local: (s: string) => pc.magenta(s),
+  addLine: (s: string) => pc.green(s),
+  delLine: (s: string) => pc.red(s),
+  lineNo: (s: string) => pc.gray(s),
   alarm: (s: string) => pc.bold(pc.red(s)),
 };
 
@@ -335,6 +340,50 @@ export async function answerPause(
   return /^y(es)?$/i.test(answer.trim()) ? { decision: "approve" } : { decision: "cancel" };
 }
 
+/**
+ * Show a diff and ask whether to apply it.
+ *
+ * The whole file is not printed — only what changes, with three lines either
+ * side. A prompt long enough to scroll is a prompt that gets approved unread,
+ * which is the failure this exists to prevent.
+ */
+async function confirmWrite(target: string, diff: FileDiff, creating: boolean): Promise<boolean> {
+  const w = (t: string) => process.stderr.write(t);
+
+  w("\n");
+  w(ui.ask(`! ${creating ? "Create" : "Change"} ${target}`));
+  w(ui.chrome(`  +${diff.added} −${diff.removed}\n`));
+  if (diff.coarse) {
+    w(ui.chrome("  (too large to align line by line — shown as a wholesale replacement)\n"));
+  }
+
+  const MAX = 120;
+  let printed = 0;
+  for (const hunk of diff.hunks) {
+    if (printed >= MAX) break;
+    w(ui.chrome("  ┄\n"));
+    for (const line of hunk.lines) {
+      if (printed++ >= MAX) break;
+      const no = String(line.kind === "add" ? line.newNo ?? "" : line.oldNo ?? "").padStart(5);
+      const body = line.text.length > 200 ? `${line.text.slice(0, 200)}…` : line.text;
+      if (line.kind === "add") w(`${ui.lineNo(no)} ${ui.addLine(`+ ${body}`)}\n`);
+      else if (line.kind === "del") w(`${ui.lineNo(no)} ${ui.delLine(`- ${body}`)}\n`);
+      else w(`${ui.lineNo(no)} ${ui.chrome(`  ${body}`)}\n`);
+    }
+  }
+  const total = diff.hunks.reduce((n, h) => n + h.lines.length, 0);
+  if (total > MAX) w(ui.chrome(`  ┄ … ${total - MAX} more lines not shown\n`));
+
+  if (!process.stdin.isTTY) {
+    // The rule the whole client follows: nobody there is not a yes. It matters
+    // most here, where saying yes changes their files.
+    w(warn("  No terminal to ask — refusing to write.\n"));
+    return false;
+  }
+  const answer = await ask(ui.chrome("  apply? [y/N] "));
+  return /^y(es)?$/i.test(answer.trim());
+}
+
 // ---- the run loop -----------------------------------------------------------
 
 interface RunOptions {
@@ -378,6 +427,10 @@ async function runLocalTool(
 
   const ctx: ToolContext = {
     cwd,
+    confirmWrite,
+    // Throws on failure by design, and the executor lets it propagate: a write
+    // whose backup failed is a write that cannot be undone.
+    backup: (abs, original, written) => saveBackup(runId, abs, original, written).then(() => undefined),
     confirm: async (question, detail) => {
       if (!process.stdin.isTTY) {
         process.stderr.write(
@@ -629,20 +682,23 @@ export function agentCommand(): Command {
         "  curvet agent --runs                 # recent runs",
         "  curvet agent --replay run_abc123    # what a finished run did",
         "",
-        "Inside a project the agent can READ it — files, folders, search. Never",
-        "write, delete or run anything; those tools do not exist here.",
+        "Inside a project the agent can read it and change it — files, folders,",
+        "search, and writes you approve as a diff first. It cannot delete or run",
+        "anything; those tools do not exist here.",
         "",
         "Outside a project it gets no access at all, because the rules that keep",
         "reads safe assume a project: .env and keys live in known places there,",
         "and in a home directory they do not. --tools overrides that.",
         "",
-        "Secrets are refused before the file is opened; anything outside the",
-        "project asks you first, every time. --no-tools turns it all off, and",
-        "`curvet agent --log` shows what it actually touched.",
+        "Secrets are refused before the file is opened; reads outside the project",
+        "ask you first and writes outside it are refused outright. --no-tools",
+        "turns it all off, `curvet agent --log` shows what it touched, and",
+        "`curvet agent --undo` puts changed files back.",
       ].join("\n"),
     )
     .option("--runs", "list recent runs instead of starting one")
-    .option("--log", "show what the agent has read on this machine")
+    .option("--log", "show what the agent has read and written on this machine")
+    .option("--undo [runId]", "put back the files the agent changed (defaults to the last run that wrote any)")
     .option("--replay <runId>", "replay a finished run from history")
     .action(async (taskParts: string[], opts) => {
       const profile = await profileFor(opts);
@@ -665,6 +721,26 @@ export function agentCommand(): Command {
               ]),
             ),
           );
+          return;
+        }
+
+        if (opts.undo !== undefined) {
+          const runId = typeof opts.undo === "string" ? opts.undo : await lastRunWithWrites();
+          if (!runId) return console.log(warn("The agent has not written anything on this machine."));
+          const result = await undoRun(runId);
+          if (opts.json) return printJson({ runId, ...result });
+
+          for (const f of result.restored) console.log(ok(`restored ${f}`));
+          for (const f of result.deleted) console.log(ok(`removed ${f}`));
+          for (const f of result.failed) console.log(fail(`${f.file} — ${f.why}`));
+          // Said out loud rather than skipped: the user asked to undo, so their
+          // own later edit is still overwritten — but they must know it happened.
+          for (const f of result.changedSince) {
+            console.log(warn(`${f} had been edited since the agent wrote it — restored anyway`));
+          }
+          if (!result.restored.length && !result.deleted.length && !result.failed.length) {
+            console.log(warn(`Run ${runId} did not write anything.`));
+          }
           return;
         }
 

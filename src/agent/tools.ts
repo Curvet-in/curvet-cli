@@ -1,6 +1,7 @@
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { classifyPath, denialMessage } from "./permissions.js";
+import { diffLines, type FileDiff } from "./diff.js";
 
 /**
  * The tools that run on this machine.
@@ -48,6 +49,19 @@ export interface ToolContext {
   cwd: string;
   /** Ask the human. Returns false when there is nobody to ask — never assumes yes. */
   confirm: (question: string, detail?: string) => Promise<boolean>;
+  /**
+   * Show a diff and ask whether to apply it. Separate from `confirm` because it
+   * renders, and rendering belongs to whoever owns the terminal.
+   *
+   * Absent means writes are impossible, not automatic. A caller that has not
+   * supplied a way to ask has not earned the right to skip asking.
+   */
+  confirmWrite?: (path: string, diff: FileDiff, creating: boolean) => Promise<boolean>;
+  /**
+   * Preserve a file's previous contents before it is overwritten, so the write
+   * can be undone. `null` means the file did not exist and undo should delete it.
+   */
+  backup?: (absPath: string, original: string | null, written: string) => Promise<void>;
 }
 
 /** Trim a result to the cap, saying so, so the model narrows instead of retrying. */
@@ -200,6 +214,91 @@ export async function listDir(ctx: ToolContext, input: Record<string, unknown>):
   return { ok: true, content, truncated: truncated || hitCap };
 }
 
+// ---- write_file -------------------------------------------------------------
+
+/**
+ * Create or replace a file, after a human has seen the diff and said yes.
+ *
+ * Three rules differ from reading, and each is a deliberate narrowing:
+ *
+ *   • Outside the project is DENIED, not confirmed. Reading a sibling package is
+ *     ordinary work; writing to one is not something an agent pointed at this
+ *     repository should be doing, and a prompt would only be a way to say yes to
+ *     it at 2am.
+ *   • Every write is confirmed. There is no auto-approve, no "allow always" and
+ *     no flag to add one, because the thing being approved is different every
+ *     time — it is the diff, not the capability.
+ *   • The previous contents are preserved first. Approving a diff on screen and
+ *     discovering its consequences a few files later are different moments, and
+ *     undo is what stands between them.
+ */
+export async function writeFile(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolOutcome> {
+  const request = String(input.path ?? "");
+  if (!request) return { ok: false, error: "No path was given." };
+  if (typeof input.content !== "string") {
+    return { ok: false, error: "write_file needs the complete new contents in `content`." };
+  }
+  if (!ctx.confirmWrite) {
+    return { ok: false, error: "This client cannot write files." };
+  }
+
+  const verdict = await classifyPath(ctx.cwd, request);
+  if (verdict.decision === "deny") {
+    return { ok: false, error: denialMessage(request, verdict.matched) };
+  }
+  if (verdict.decision === "confirm") {
+    // The read path asks here. The write path refuses.
+    return {
+      ok: false,
+      error:
+        `Refused: "${request.slice(0, 120)}" is outside this project, and this client only writes inside it. ` +
+        "Write to a path within the project, or ask the user to make the change themselves.",
+    };
+  }
+
+  let original: string | null = null;
+  try {
+    const stat = await fs.stat(verdict.abs);
+    if (stat.isDirectory()) return { ok: false, error: `"${request}" is a directory.` };
+    original = await fs.readFile(verdict.abs, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      return { ok: false, error: `Could not open "${request}": ${(err as Error).message}` };
+    }
+  }
+
+  const next = input.content;
+  if (original !== null && original === next) {
+    // Say so rather than staging a no-op diff for approval. A prompt with nothing
+    // in it teaches the user that prompts are noise.
+    return { ok: true, content: `${request} already has exactly these contents. Nothing was written.`, truncated: false };
+  }
+
+  const diff = diffLines(original ?? "", next);
+  const approved = await ctx.confirmWrite(request, diff, original === null);
+  if (!approved) {
+    return {
+      ok: false,
+      error: `The user declined this change to "${request.slice(0, 120)}". Do not try again with a variation — ask them what they want instead.`,
+    };
+  }
+
+  try {
+    if (ctx.backup) await ctx.backup(verdict.abs, original, next);
+    await fs.mkdir(path.dirname(verdict.abs), { recursive: true });
+    await fs.writeFile(verdict.abs, next, "utf8");
+  } catch (err) {
+    return { ok: false, error: `Could not write "${request}": ${(err as Error).message}` };
+  }
+
+  const verb = original === null ? "Created" : "Updated";
+  return {
+    ok: true,
+    content: `${verb} ${request} (+${diff.added} −${diff.removed}). The user approved this change.`,
+    truncated: false,
+  };
+}
+
 // ---- grep -------------------------------------------------------------------
 
 /**
@@ -332,15 +431,16 @@ async function isReadable(ctx: ToolContext, abs: string): Promise<boolean> {
 
 // ---- dispatch ---------------------------------------------------------------
 
-export type ToolName = "read_file" | "list_dir" | "grep";
+export type ToolName = "read_file" | "list_dir" | "grep" | "write_file";
 
 /** Everything this client can execute. Declared to the server verbatim. */
-export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep"];
+export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file"];
 
 const EXECUTORS: Record<ToolName, (ctx: ToolContext, input: Record<string, unknown>) => Promise<ToolOutcome>> = {
   read_file: readFile,
   list_dir: listDir,
   grep,
+  write_file: writeFile,
 };
 
 /**

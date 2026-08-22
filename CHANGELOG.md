@@ -2,6 +2,34 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.9.0
+
+- **`write_file`** — the agent can now change files in your project, and every
+  change is shown as a diff you approve before anything is written. There is no
+  auto-approve, no "allow always", and no flag to add one: what you are approving
+  is different every time, because it is the diff, not the capability.
+
+  Only what changed is printed, with three lines either side. A prompt long
+  enough to scroll is a prompt that gets approved unread.
+
+  **Writes outside the project are refused, not confirmed.** Reading a sibling
+  package is ordinary work in a monorepo; writing to one is not something an
+  agent pointed at this repository should be doing, and a prompt would only be a
+  way to say yes to it at 2am. Secrets are refused as before — it never asks.
+
+  With no terminal, a write is refused. Piped or in CI, nothing gets written.
+
+- **`curvet agent --undo`** — put back the files the agent changed. Every write
+  saves the previous contents first, so undo exists before the first regret, and
+  a file written twice in one run returns to how it looked *before the run*
+  rather than to its state midway through.
+
+  If you edited a file yourself after the agent wrote it, undo still restores it
+  — you asked — but it says so rather than quietly overwriting your work.
+
+  Deliberately not `git stash`: that mutates a repository you are also using,
+  mid-session, and does nothing at all outside a git repo.
+
 ## 0.8.0
 
 - **Reading your project is now the default.** `curvet agent` inside a project
