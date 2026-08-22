@@ -10,16 +10,28 @@ All notable changes to `@curvet/cli` are documented here.
   live cost and elapsed time in the header.
 
   ```
-  ┌─ curvet agent ─────────────── auto · 2 turns · $0.14 · 0m53s ─┐
-  │ › read src/server.ts and tell me the port │ ✓ Read src/server.ts │
-  │ The server listens on port 8412.          │ ✓ Write src/server…  │
-  │ › now change that port to 9300            ├──────────────────────┤
-  │ Done — updated 8412 → 9300.               │ - const PORT = 8412; │
-  │                                           │ + const PORT = 9300; │
+  › read src/server.ts and tell me the port
+  ✓ Read src/server.ts
+  The server listens on port 8412.
+
+  › now change that port to 9300
+  ✓ Write src/server.ts
+    - const PORT = 8412;
+    + const PORT = 9300;
+  Done — updated 8412 → 9300.
+
+  › Ask anything▌
+  claude-sonnet-4-6 · $0.14 · 2 turns · demo-proj  ⎇ main 3 changed
   ```
 
-  Approvals happen inside it: a diff appears in the prompt and `y` applies it.
-  Esc stops a turn, Ctrl-C leaves.
+  One column, with tool calls in the transcript at the point the agent made
+  them — a call belongs in the conversation it was part of, not in a column
+  beside it, and a side pane takes width from the only thing anyone reads.
+
+  Approvals replace the input bar, so a diff appears exactly where your attention
+  already is and there is nothing to type past. `y` applies it. Esc stops a turn,
+  Ctrl-C leaves. The last line is always the status bar: model, spend, turns,
+  project, branch and how many files are dirty.
 
   A task on the command line still runs one-shot and inline, unchanged — that is
   what pipes and CI use, and it should not open a UI. `--json` is unchanged too.

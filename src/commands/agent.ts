@@ -803,6 +803,7 @@ export function agentCommand(): Command {
           const access = await resolveToolAccess(opts);
           const { AgentSession } = await import("../agent/session.js");
           const { runTui } = await import("../agent/tui/index.js");
+          const { repoStatus } = await import("../git.js");
           const session = new AgentSession({
             client,
             cwd: access.root,
@@ -816,6 +817,7 @@ export function agentCommand(): Command {
             cwd: access.root,
             toolsEnabled: access.enabled,
             model: opts.model ?? "auto",
+            git: await repoStatus(access.root),
           });
           return;
         }

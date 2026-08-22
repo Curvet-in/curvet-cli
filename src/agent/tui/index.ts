@@ -13,6 +13,7 @@ export async function runTui(opts: {
   cwd: string;
   toolsEnabled: boolean;
   model: string;
+  git: { branch: string | null; files: number } | null;
 }): Promise<void> {
   const [{ render }, React, { default: App }] = await Promise.all([
     import("ink"),
@@ -26,6 +27,7 @@ export async function runTui(opts: {
       cwd: opts.cwd,
       toolsEnabled: opts.toolsEnabled,
       model: opts.model,
+      git: opts.git,
     }),
     // The alternate screen is ink's default via its own fullscreen handling; we
     // let it own the terminal and simply wait for it to finish.

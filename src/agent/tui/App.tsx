@@ -1,21 +1,35 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
-import type { AgentSession, SessionState, Approval } from "../session.js";
+import path from "node:path";
+import type { AgentSession, SessionState, Approval, Entry } from "../session.js";
 import type { DiffLine } from "../diff.js";
 
 /**
  * The full-screen session.
  *
  * Purely a renderer: everything it shows comes from AgentSession, and everything
- * it does goes back through `send`, `answer` and `abort`. That separation is
- * what lets the same engine sit behind a desktop app later, and it is also why
- * approvals are state here rather than a stdin read — the session parks and
- * publishes what it is waiting for, and this decides how to ask.
+ * it does goes back through `send`, `answer` and `abort`. That separation is what
+ * lets the same engine sit behind a desktop app later, and it is why an approval
+ * is state here rather than a stdin read — the session parks and publishes what
+ * it is waiting for, and this decides how to ask.
  *
- * Colours are chosen for the same reasons as the inline renderer's: the default
- * foreground for what the agent says (the only colour legible on a light
- * terminal and a dark one), weight rather than hue for what matters, and the
- * ACP-ish notion that a call should read by what it DOES.
+ * ── The shape, and where it came from ───────────────────────────────────────
+ *
+ * One column, not panes. This began as a conversation pane with a tool timeline
+ * and a diff pane beside it; reading Cline's CLI made the case for the simpler
+ * thing, and it is right for three reasons:
+ *
+ *   • A tool call belongs where the agent made it. In a side pane it loses the
+ *     conversation it was part of, and the reader has to reconstruct an order
+ *     nobody gave them.
+ *   • A side pane takes width from the only thing anyone reads. On an 80-column
+ *     terminal, a third of it leaves neither column comfortable.
+ *   • The approval REPLACES the input, so it appears exactly where attention
+ *     already is, and there is nothing to type past.
+ *
+ * Colours follow the inline renderer's rules: unstyled for what the agent says
+ * (the only colour legible on a light terminal and a dark one), weight rather
+ * than hue for what matters, grey — never `dim` — for chrome.
  */
 
 interface Props {
@@ -23,9 +37,37 @@ interface Props {
   cwd: string;
   toolsEnabled: boolean;
   model: string;
+  /** Branch and changed-file count, when this is a git repo. */
+  git: { branch: string | null; files: number } | null;
 }
 
-/** Rough wrap so a pane's text does not spill past its column. */
+/**
+ * What a chunk of terminal input means.
+ *
+ * Separated from the component so it can be tested without a terminal, which is
+ * how the space-bar bug should have been caught: a lone " " is a keystroke like
+ * any other, and trimming it away left a UI you could type in but never put a
+ * gap between two words in.
+ *
+ * A keypress is not always one key. Typing delivers a character at a time;
+ * PASTING delivers the whole clipboard at once, and so does anything driving
+ * this over a pty. ink reports Enter as key.return only for a lone CR, so a
+ * pasted line ending in a newline has to be recognised here, or it lands in the
+ * buffer as an invisible character that can never be typed out.
+ */
+export function readChunk(char: string): { text: string; submit: boolean } {
+  const submit = /[\r\n]$/.test(char);
+  // A TRAILING newline is the submit signal, not content, so it is dropped.
+  // Newlines INSIDE a paste become spaces — a multi-line prompt is still one
+  // message, and a raw newline in a single-line input breaks the line it lands on.
+  const body = submit ? char.replace(/[\r\n]+$/, "") : char;
+  return {
+    submit,
+    text: [...body.replace(/[\r\n]+/g, " ")].filter((c) => c >= " " && c !== "\u007f").join(""),
+  };
+}
+
+/** Wrap to a column, cutting a single over-long word rather than breaking out. */
 function wrap(text: string, width: number): string[] {
   if (width < 8) return [text];
   const out: string[] = [];
@@ -38,8 +80,6 @@ function wrap(text: string, width: number): string[] {
     for (const word of paragraph.split(" ")) {
       if (line.length + word.length + 1 > width) {
         if (line) out.push(line);
-        // A single word longer than the pane (a URL, a path) is cut rather than
-        // allowed to break the layout.
         line = word.length > width ? word.slice(0, width) : word;
       } else {
         line = line ? `${line} ${word}` : word;
@@ -50,87 +90,112 @@ function wrap(text: string, width: number): string[] {
   return out;
 }
 
-function DiffView({ lines, width }: { lines: DiffLine[]; width: number }) {
+function DiffLines({ lines, width }: { lines: DiffLine[]; width: number }) {
   return (
     <>
       {lines.map((l, i) => {
-        const body = l.text.length > width - 3 ? `${l.text.slice(0, width - 4)}…` : l.text;
-        if (l.kind === "add") return <Text key={i} color="green">{`+ ${body}`}</Text>;
-        if (l.kind === "del") return <Text key={i} color="red">{`- ${body}`}</Text>;
-        return <Text key={i} dimColor>{`  ${body}`}</Text>;
+        const body = l.text.length > width ? `${l.text.slice(0, Math.max(1, width - 1))}…` : l.text;
+        if (l.kind === "add") return <Text key={i} color="green">{`  + ${body}`}</Text>;
+        if (l.kind === "del") return <Text key={i} color="red">{`  - ${body}`}</Text>;
+        return <Text key={i} color="gray">{`    ${body}`}</Text>;
       })}
     </>
   );
 }
 
-/** What the session is parked on, and how to answer it. */
+/** Does this summary tell the reader anything the title has not already? */
+function isEmptySummary(detail: string, name: string): boolean {
+  const d = detail.trim().toLowerCase();
+  return d === "ok" || d === `${name.toLowerCase()} ok` || d === name.toLowerCase();
+}
+
+/** A tool call, in the transcript, at the point it happened. */
+function ToolEntry({ entry, width }: { entry: Extract<Entry, { kind: "tool" }>; width: number }) {
+  const mark = entry.status === "failed" ? "✖" : entry.status === "ok" ? "✓" : "·";
+  const markColor = entry.status === "failed" ? "red" : entry.status === "ok" ? "green" : "yellow";
+  return (
+    <Box flexDirection="column">
+      <Text wrap="truncate">
+        <Text color={markColor}>{mark}</Text>
+        {/* Local calls touched this machine — worth telling apart at a glance. */}
+        <Text color={entry.where === "local" ? "magenta" : "cyan"}>{` ${entry.title}`}</Text>
+        {/* Only when it adds something. A successful call whose summary is just
+            "<tool> ok" repeats the title and buries the ones that do say
+            something — "4 results", "blocked: non-public address". */}
+        {entry.detail && !isEmptySummary(entry.detail, entry.name) ? (
+          <Text color="gray">{`  ${entry.detail}`}</Text>
+        ) : null}
+      </Text>
+      {entry.diff ? (
+        <DiffLines lines={entry.diff.hunks.flatMap((h) => h.lines).slice(0, 12)} width={width - 6} />
+      ) : null}
+    </Box>
+  );
+}
+
+/** What the session is parked on. Rendered where the input normally is. */
 function ApprovalPrompt({ pending, width }: { pending: Approval; width: number }) {
   if (pending.kind === "write") {
-    const shown = pending.diff.hunks.flatMap((h) => h.lines).slice(0, 14);
+    const all = pending.diff.hunks.flatMap((h) => h.lines);
+    const shown = all.slice(0, 16);
     return (
       <Box flexDirection="column">
-        <Text bold color="yellow">
-          {pending.creating ? "Create" : "Change"} {pending.path}
-          <Text dimColor>{`  +${pending.diff.added} −${pending.diff.removed}`}</Text>
+        <Text>
+          <Text bold color="yellow">{`${pending.creating ? "Create" : "Change"} ${pending.path}`}</Text>
+          <Text color="gray">{`  +${pending.diff.added} −${pending.diff.removed}`}</Text>
         </Text>
-        <DiffView lines={shown} width={width} />
-        <Text dimColor>{"y to apply · n to decline · esc to stop"}</Text>
+        <DiffLines lines={shown} width={width - 6} />
+        {all.length > shown.length ? (
+          <Text color="gray">{`    … ${all.length - shown.length} more lines`}</Text>
+        ) : null}
+        <Text color="gray">y apply · n decline · esc stop</Text>
       </Box>
     );
   }
   if (pending.kind === "ask_user") {
     return (
       <Box flexDirection="column">
-        <Text bold color="yellow">
-          {pending.prompt}
-        </Text>
-        {pending.options?.length ? <Text dimColor>{pending.options.join("  ·  ")}</Text> : null}
-        <Text dimColor>type an answer and press enter</Text>
+        <Text bold color="yellow">{pending.prompt}</Text>
+        {pending.options?.length ? <Text color="gray">{pending.options.join("  ·  ")}</Text> : null}
+        <Text color="gray">type an answer, then enter</Text>
       </Box>
     );
   }
   if (pending.kind === "read") {
-    // A read the policy would otherwise wave through, or one outside the project.
     return (
       <Box flexDirection="column">
-        <Text bold color="yellow">
-          {pending.title}
-        </Text>
-        {pending.detail ? <Text dimColor>{pending.detail}</Text> : null}
-        <Text dimColor>{"y to allow · n to decline · esc to stop"}</Text>
+        <Text bold color="yellow">{pending.title}</Text>
+        {pending.detail ? <Text color="gray">{pending.detail}</Text> : null}
+        <Text color="gray">y allow · n decline · esc stop</Text>
       </Box>
     );
   }
-
-  const warning = pending.kind === "confirm" ? pending.warning : undefined;
   return (
     <Box flexDirection="column">
       <Text bold color={pending.kind === "confirm" ? "red" : "yellow"}>
         {pending.kind === "confirm" ? "Approve this action?" : "Approve this plan?"}
       </Text>
-      {wrap(pending.prompt, width).slice(0, 8).map((l, i) => (
-        <Text key={i}>{l}</Text>
-      ))}
+      {wrap(pending.prompt, width - 2)
+        .slice(0, 8)
+        .map((l, i) => (
+          <Text key={i}>{l}</Text>
+        ))}
       {pending.kind === "plan" && pending.steps
-        ? pending.steps.slice(0, 6).map((s, i) => (
-            <Text key={i} dimColor>{`  · ${s.agent}: ${s.task}`}</Text>
-          ))
+        ? pending.steps.slice(0, 6).map((s, i) => <Text key={i} color="gray">{`  · ${s.agent}: ${s.task}`}</Text>)
         : null}
-      {warning ? <Text color="red">{warning}</Text> : null}
-      <Text dimColor>{"y to allow · n to decline · esc to stop"}</Text>
+      {pending.kind === "confirm" && pending.warning ? <Text color="red">{pending.warning}</Text> : null}
+      <Text color="gray">y allow · n decline · esc stop</Text>
     </Box>
   );
 }
 
-export default function App({ session, cwd, toolsEnabled, model }: Props) {
+export default function App({ session, cwd, toolsEnabled, model, git }: Props) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [state, setState] = useState<SessionState>(() => session.snapshot());
   const [input, setInput] = useState("");
-  const [started] = useState(Date.now());
-  const [now, setNow] = useState(Date.now());
-
   const [size, setSize] = useState({ columns: stdout?.columns ?? 0, rows: stdout?.rows ?? 0 });
+
   useEffect(() => {
     if (!stdout) return;
     const onResize = () => setSize({ columns: stdout.columns, rows: stdout.rows });
@@ -142,24 +207,14 @@ export default function App({ session, cwd, toolsEnabled, model }: Props) {
   }, [stdout]);
 
   useEffect(() => session.subscribe(setState), [session]);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
 
   // `||` and not `??`: a pty created without a window size reports 0, not
-  // undefined, so `?? 100` leaves width at zero and the whole UI renders
+  // undefined, so `?? 100` leaves the width at zero and the whole UI renders
   // invisibly with nothing to explain why. Some CI runners and multiplexers do
-  // exactly this. Floors keep a genuinely tiny terminal usable rather than
-  // broken.
+  // exactly that. The floors keep a genuinely tiny terminal usable.
   const cols = Math.max(40, size.columns || 100);
   const rows = Math.max(12, size.rows || 30);
-  // Below this the two-column layout leaves nothing readable in either column,
-  // so the side pane goes and the conversation gets the whole width.
-  const wide = cols >= 76;
-  const sideWidth = wide ? Math.max(24, Math.min(38, Math.floor(cols * 0.34))) : 0;
-  const mainWidth = Math.max(20, cols - sideWidth - 4);
-  const bodyHeight = Math.max(6, rows - 6);
+  const width = cols - 2;
 
   const answering = state.pending?.kind === "ask_user";
 
@@ -172,7 +227,7 @@ export default function App({ session, cwd, toolsEnabled, model }: Props) {
 
   useInput((char, key) => {
     if (key.escape) {
-      if (state.status === "thinking" || state.status === "awaiting-approval") session.abort();
+      if (state.status !== "idle") session.abort();
       return;
     }
     if (key.ctrl && char === "c") {
@@ -180,14 +235,12 @@ export default function App({ session, cwd, toolsEnabled, model }: Props) {
       else session.abort();
       return;
     }
-
-    // While parked on a yes/no, the keyboard answers it rather than typing.
+    // Parked on a yes/no: the keyboard answers rather than types.
     if (state.pending && !answering) {
       if (char === "y" || char === "Y") session.answer(true);
       else if (char === "n" || char === "N") session.answer(false);
       return;
     }
-
     if (key.backspace || key.delete) {
       setInput((v) => v.slice(0, -1));
       return;
@@ -196,123 +249,86 @@ export default function App({ session, cwd, toolsEnabled, model }: Props) {
       if (key.return) submit(input);
       return;
     }
-
-    // A keypress is not always one key. Typing delivers one character at a time,
-    // but PASTING delivers the whole clipboard in a single chunk — and so does
-    // anything driving this over a pty. ink reports Enter as key.return only for
-    // a lone CR, so a pasted line ending in a newline would otherwise land in the
-    // buffer as an invisible character and never submit, leaving a UI you cannot
-    // send anything from with nothing on screen to say why.
-    //
-    // So: split the chunk on newlines. Everything before the last one is typed;
-    // a trailing newline submits.
-    const endsWithNewline = /[\r\n]$/.test(char);
-    const printable = [...char.replace(/[\r\n]+/g, " ")]
-      .filter((c) => c >= " " && c !== "\u007f")
-      .join("")
-      .trimEnd();
-
-    if (endsWithNewline || key.return) {
+    const { text: printable, submit: isSubmit } = readChunk(char);
+    if (isSubmit || key.return) {
       submit(`${input}${printable}`);
       return;
     }
     if (printable) setInput((v) => v + printable);
   });
 
-  // The conversation, flattened to lines and windowed to what fits. Rendering
-  // only the tail is what keeps a long session from re-laying-out every frame.
-  const transcript = useMemo(() => {
-    const lines: { text: string; role: "user" | "agent" }[] = [];
-    for (const m of state.messages) {
-      for (const l of wrap(m.text, mainWidth)) lines.push({ text: l, role: m.role });
-      lines.push({ text: "", role: m.role });
+  // Only the tail is rendered, so a long session does not re-lay-out everything
+  // on every frame. The approval takes more room, so the transcript yields it.
+  const bodyHeight = Math.max(4, rows - (state.pending ? 14 : 5));
+  const lines = useMemo(() => {
+    const out: React.ReactNode[] = [];
+    for (const e of state.entries) {
+      if (e.kind === "user") {
+        for (const l of wrap(e.text, width - 2)) {
+          out.push(
+            <Text key={`${e.id}-${out.length}`} color="cyan">{`› ${l}`}</Text>,
+          );
+        }
+      } else if (e.kind === "agent") {
+        for (const l of wrap(e.text, width)) out.push(<Text key={`${e.id}-${out.length}`}>{l}</Text>);
+      } else {
+        out.push(<ToolEntry key={e.id} entry={e} width={width} />);
+      }
+      out.push(<Text key={`gap-${e.id}-${out.length}`}> </Text>);
     }
     if (state.streaming) {
-      for (const l of wrap(state.streaming, mainWidth)) lines.push({ text: l, role: "agent" });
+      for (const l of wrap(state.streaming, width)) out.push(<Text key={`s-${out.length}`}>{l}</Text>);
     }
-    return lines.slice(-bodyHeight);
-  }, [state.messages, state.streaming, mainWidth, bodyHeight]);
+    return out.slice(-bodyHeight);
+  }, [state.entries, state.streaming, width, bodyHeight]);
 
-  const elapsed = Math.floor((now - started) / 1000);
-  const clock = `${Math.floor(elapsed / 60)}m${String(elapsed % 60).padStart(2, "0")}s`;
+  const project = path.basename(cwd);
+  const dirty = git?.files ? ` ${git.files} changed` : "";
+  const branch = git?.branch ? `  ⎇ ${git.branch}${dirty}` : "";
+  const spent = state.costUsd > 0 ? ` · $${state.costUsd.toFixed(4)}` : "";
+  const busy = state.status === "thinking" || state.status === "aborting";
 
   return (
     <Box flexDirection="column" width={cols} height={rows}>
-      <Box borderStyle="round" borderColor="cyan" paddingX={1} justifyContent="space-between">
-        <Text bold color="cyan">
-          curvet agent
-        </Text>
-        <Text dimColor>
-          {model} · {state.turns} turn{state.turns === 1 ? "" : "s"} · ${state.costUsd.toFixed(4)} · {clock}
-        </Text>
+      <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
+        {lines.length === 0 ? (
+          <Box flexDirection="column">
+            <Text color="gray">
+              {toolsEnabled
+                ? `Reading and editing ${project}. Every change is shown before it is made.`
+                : "No file access here — run inside a project, or pass --tools."}
+            </Text>
+            <Text color="gray">Esc stops a turn · Ctrl-C leaves</Text>
+          </Box>
+        ) : (
+          lines
+        )}
       </Box>
 
-      <Box flexGrow={1}>
-        <Box flexDirection="column" width={mainWidth + 2} paddingX={1} overflow="hidden">
-          {transcript.length === 0 ? (
-            <Box flexDirection="column">
-              <Text dimColor>{toolsEnabled ? `reading ${cwd}` : "no file access — run inside a project, or --tools"}</Text>
-              <Text dimColor>Ask for something. Esc stops a turn, Ctrl-C leaves.</Text>
-            </Box>
-          ) : (
-            transcript.map((l, i) =>
-              l.role === "user" ? (
-                <Text key={i} color="cyan">{l.text ? `› ${l.text}` : ""}</Text>
-              ) : (
-                <Text key={i}>{l.text}</Text>
-              ),
-            )
-          )}
-        </Box>
-
-        {wide ? (
-        <Box flexDirection="column" width={sideWidth} borderStyle="round" borderColor="gray" paddingX={1}>
-          <Text dimColor>TOOLS</Text>
-          {state.tools.length === 0 ? (
-            <Text dimColor>—</Text>
-          ) : (
-            state.tools.slice(-Math.max(4, Math.floor(bodyHeight / 2))).map((t) => (
-              <Text key={t.id} wrap="truncate">
-                <Text color={t.status === "failed" ? "red" : t.status === "ok" ? "green" : "yellow"}>
-                  {t.status === "failed" ? "✖" : t.status === "ok" ? "✓" : "·"}
-                </Text>
-                <Text color={t.where === "local" ? "magenta" : undefined}>{` ${t.title}`}</Text>
-              </Text>
-            ))
-          )}
-
-          {state.lastDiff ? (
-            <Box flexDirection="column" marginTop={1}>
-              <Text dimColor>DIFF · {state.lastDiff.path}</Text>
-              <DiffView
-                lines={state.lastDiff.diff.hunks.flatMap((h) => h.lines).slice(0, Math.max(3, Math.floor(bodyHeight / 3)))}
-                width={sideWidth - 2}
-              />
-            </Box>
-          ) : null}
-        </Box>
-        ) : null}
-      </Box>
-
-      <Box
-        borderStyle="round"
-        borderColor={state.pending ? "yellow" : state.error ? "red" : "gray"}
-        paddingX={1}
-        flexDirection="column"
-      >
+      <Box flexDirection="column" flexShrink={0} paddingX={1}>
         {state.error ? <Text color="red">{state.error}</Text> : null}
+
         {state.pending ? (
-          <ApprovalPrompt pending={state.pending} width={cols - 6} />
+          <ApprovalPrompt pending={state.pending} width={width} />
         ) : (
           <Text>
-            <Text color="cyan">› </Text>
-            {input}
-            <Text dimColor>{state.status === "idle" ? "▌" : ""}</Text>
+            <Text color="cyan">{"› "}</Text>
+            {input ? (
+              <Text>{input}</Text>
+            ) : (
+              <Text color="gray">{busy ? state.statusLine || "working…" : "Ask anything"}</Text>
+            )}
+            {!busy ? <Text color="gray">▌</Text> : null}
           </Text>
         )}
-        {!state.pending && state.status !== "idle" ? (
-          <Text dimColor>{state.statusLine || "working…"} — esc to stop</Text>
-        ) : null}
+
+        {/* Last line, always: the things you check without looking — where you
+            are, what it has cost — belong in one fixed place. */}
+        <Text color="gray" wrap="truncate">
+          {`${model}${spent} · ${state.turns} turn${state.turns === 1 ? "" : "s"} · ${project}${branch}`}
+          {toolsEnabled ? "" : " · read-only"}
+          {busy ? " · esc to stop" : ""}
+        </Text>
       </Box>
     </Box>
   );

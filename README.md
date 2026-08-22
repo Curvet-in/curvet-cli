@@ -158,18 +158,24 @@ can say "now change that one" and be understood, with the conversation, the tool
 timeline and the last diff each in their own pane.
 
 ```
-┌─ curvet agent ─────────────────────── auto · 2 turns · $0.14 · 0m53s ─┐
-│ › read src/server.ts and tell me the port  │ ✓ Read src/server.ts     │
-│ The server listens on port 8412.           │ ✓ Write src/server.ts    │
-│ › now change that port to 9300             ├──────────────────────────┤
-│ Done — updated 8412 → 9300.                │ - const PORT = 8412;     │
-│                                            │ + const PORT = 9300;     │
-├────────────────────────────────────────────┴──────────────────────────┤
-│ › _                                                                   │
-└───────────────────────────────────────────────────────────────────────┘
+› read src/server.ts and tell me the port
+✓ Read src/server.ts
+The server listens on port 8412.
+
+› now change that port to 9300
+✓ Write src/server.ts
+  - const PORT = 8412;
+  + const PORT = 9300;
+Done — updated 8412 → 9300.
+
+› Ask anything▌
+claude-sonnet-4-6 · $0.14 · 2 turns · demo-proj  ⎇ main 3 changed
 ```
 
-Diffs are approved in place — `y` applies. Esc stops a turn, Ctrl-C leaves.
+Tool calls appear in the conversation at the point the agent made them. Diffs are
+approved where the input is — `y` applies, `n` declines. Esc stops a turn,
+Ctrl-C leaves. The bottom line always tells you the model, the spend, where you
+are and how much is uncommitted.
 
 Give it a task on the command line instead and it runs once and exits, printing
 inline, which is what pipes and CI want:

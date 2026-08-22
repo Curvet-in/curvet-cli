@@ -52,7 +52,7 @@ describe("a turn", () => {
     ]);
     await session.send("hi");
     const s = session.snapshot();
-    expect(s.messages.map((m) => [m.role, m.text])).toEqual([
+    expect(s.entries.map((e) => [e.kind, "text" in e ? e.text : ""])).toEqual([
       ["user", "hi"],
       ["agent", "Hello there"],
     ]);
@@ -77,19 +77,19 @@ describe("a turn", () => {
     const first = session.send("one");
     await session.send("two"); // must be dropped, not queued into the same turn
     await first;
-    expect(session.snapshot().messages.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(session.snapshot().entries.filter((e) => e.kind === "user")).toHaveLength(1);
   });
 
   it("carries prior turns as history, so a follow-up can say 'that one'", async () => {
     // Server-side conversation persistence is off, so continuity is the client's
     // job. Without this, every turn starts from nothing.
     const { client } = fakeClient([{ type: "run_end" }]);
-    const runSpy = vi.fn(() => (async function* () { yield { type: "run_end" } as AgencyEvent; })());
+    const runSpy = vi.fn((_p?: unknown) => (async function* () { yield { type: "run_end" } as AgencyEvent; })());
     (client as never as { agency: { run: unknown } }).agency.run = runSpy;
     const session = new AgentSession({ client, cwd: process.cwd(), toolsEnabled: false });
     await session.send("first");
     await session.send("second");
-    const second = runSpy.mock.calls[1][0] as { history: unknown[] };
+    const second = runSpy.mock.calls[1]?.[0] as unknown as { history: unknown[] };
     expect(second.history.length).toBeGreaterThan(0);
   });
 
@@ -154,7 +154,22 @@ describe("approvals are state", () => {
   });
 });
 
-describe("the tool timeline", () => {
+describe("the transcript", () => {
+  it("keeps tools in the order they happened, between the prose", async () => {
+    // A tool call belongs where the agent made it. Collecting all the prose
+    // above all the calls would misreport the order of everything.
+    const { session } = make([
+      { type: "agent_delta", text: "Let me look." },
+      { type: "tool_call", callId: "t1", tool: "web_search", input: {} },
+      { type: "tool_result", callId: "t1", ok: true, summary: "4 results" },
+      { type: "agent_delta", text: "Found it." },
+      { type: "run_end" },
+    ]);
+    await session.send("go");
+    expect(session.snapshot().entries.map((e) => e.kind)).toEqual(["user", "agent", "tool", "agent"]);
+  });
+
+
   it("tracks a server tool from running to done", async () => {
     const { session } = make([
       { type: "tool_call", callId: "t1", tool: "web_search", input: {} },
@@ -162,7 +177,7 @@ describe("the tool timeline", () => {
       { type: "run_end" },
     ]);
     await session.send("go");
-    const [tool] = session.snapshot().tools;
+    const tool = session.snapshot().entries.find((e) => e.kind === "tool");
     expect(tool).toMatchObject({ name: "web_search", where: "server", status: "ok", detail: "4 results" });
   });
 
@@ -173,7 +188,7 @@ describe("the tool timeline", () => {
       { type: "run_end" },
     ]);
     await session.send("go");
-    expect(session.snapshot().tools[0].status).toBe("failed");
+    expect(session.snapshot().entries.find((e) => e.kind === "tool")).toMatchObject({ status: "failed" });
   });
 
   it("does not list a local tool twice when the run announces it as both", async () => {
@@ -196,10 +211,9 @@ describe("the tool timeline", () => {
       true,
     );
     await session.send("go");
-    const tools = session.snapshot().tools;
+    const tools = session.snapshot().entries.filter((e) => e.kind === "tool");
     expect(tools).toHaveLength(1);
-    expect(tools[0].where).toBe("local");
-    expect(tools[0].title).toBe("Read x");
+    expect(tools[0]).toMatchObject({ where: "local", title: "Read x" });
   });
 
   it("answers a local tool even when it fails, rather than leaving the run to time out", async () => {

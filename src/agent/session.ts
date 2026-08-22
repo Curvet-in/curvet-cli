@@ -23,23 +23,30 @@ import type { FileDiff } from "./diff.js";
 
 export type SessionStatus = "idle" | "thinking" | "awaiting-approval" | "aborting";
 
-export interface TurnMessage {
-  role: "user" | "agent";
-  text: string;
-  /** Set once the turn finishes, so a renderer can show cost per exchange. */
-  costUsd?: number;
-  runId?: string;
-}
-
-export interface ToolRecord {
-  id: string;
-  name: string;
-  title: string;
-  /** Where it ran. Local calls touched this machine and should look different. */
-  where: "server" | "local";
-  status: "running" | "ok" | "failed";
-  detail?: string;
-}
+/**
+ * One thing that happened, in the order it happened.
+ *
+ * A single ordered list rather than messages-here and tools-there, because that
+ * is what a transcript IS: a tool call belongs at the point in the conversation
+ * where the agent made it, not in a column beside it. Keeping them apart forces
+ * a renderer to reconstruct an order it was never given.
+ */
+export type Entry =
+  | { kind: "user"; id: string; text: string }
+  | { kind: "agent"; id: string; text: string }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      title: string;
+      /** Local calls touched this machine and are worth marking as such. */
+      where: "server" | "local";
+      status: "running" | "ok" | "failed";
+      detail?: string;
+      /** Present once a write is applied, so the diff stays in the transcript. */
+      diff?: FileDiff;
+      path?: string;
+    };
 
 /** Something the session is parked on, waiting for a person. */
 export type Approval =
@@ -50,14 +57,11 @@ export type Approval =
   | { kind: "confirm"; id: string; prompt: string; warning?: string };
 
 export interface SessionState {
-  messages: TurnMessage[];
-  /** The agent's reply as it arrives, before it becomes a message. */
+  entries: Entry[];
+  /** The agent's reply as it arrives, before it becomes an entry. */
   streaming: string;
-  tools: ToolRecord[];
   status: SessionStatus;
   pending: Approval | null;
-  /** Most recent diff, so a pane can keep showing it after the prompt closes. */
-  lastDiff: { path: string; diff: FileDiff } | null;
   statusLine: string;
   costUsd: number;
   turns: number;
@@ -83,12 +87,10 @@ const MAX_HISTORY_TURNS = 6; // the server bounds this anyway; matching it avoid
 
 export class AgentSession {
   private state: SessionState = {
-    messages: [],
+    entries: [],
     streaming: "",
-    tools: [],
     status: "idle",
     pending: null,
-    lastDiff: null,
     statusLine: "",
     costUsd: 0,
     turns: 0,
@@ -101,6 +103,8 @@ export class AgentSession {
   private controller: AbortController | null = null;
   /** Resolves the approval the session is currently parked on. */
   private resolveApproval: ((approved: boolean, note?: string) => void) | null = null;
+  /** The client tool currently executing, so its diff can be attached to it. */
+  private writingCallId: string | null = null;
   readonly sessionId: string;
 
   constructor(private opts: SessionOptions) {
@@ -116,7 +120,7 @@ export class AgentSession {
 
   snapshot(): SessionState {
     // A copy, so a renderer comparing previous to next sees a different object.
-    return { ...this.state, messages: [...this.state.messages], tools: [...this.state.tools] };
+    return { ...this.state, entries: [...this.state.entries] };
   }
 
   private emit(): void {
@@ -161,9 +165,10 @@ export class AgentSession {
   /** Prior turns, for continuity. Server-side conversation persistence is off, so
    * the client carries it — bounded to what the server would keep anyway. */
   private history(): { role: "user" | "assistant"; content: string }[] {
-    return this.state.messages
+    return this.state.entries
+      .filter((e): e is Extract<Entry, { kind: "user" | "agent" }> => e.kind === "user" || e.kind === "agent")
       .slice(-MAX_HISTORY_TURNS * 2)
-      .map((m) => ({ role: m.role === "agent" ? ("assistant" as const) : ("user" as const), content: m.text }));
+      .map((e) => ({ role: e.kind === "agent" ? ("assistant" as const) : ("user" as const), content: e.text }));
   }
 
   private toolContext(runId: string): ToolContext {
@@ -179,17 +184,42 @@ export class AgentSession {
         return approved;
       },
       confirmWrite: async (path, diff, creating) => {
-        this.patch({ lastDiff: { path, diff } });
         const { approved } = await this.park({ kind: "write", id: `w_${Date.now()}`, path, diff, creating });
+        // Kept on the tool entry so the diff stays where it happened in the
+        // transcript, rather than only in whatever pane last showed it.
+        if (approved && this.writingCallId) this.setTool(this.writingCallId, { diff, path });
         return approved;
       },
       backup: (abs, original, written) => saveBackup(runId, abs, original, written).then(() => undefined),
     };
   }
 
-  private setTool(id: string, patch: Partial<ToolRecord>): void {
-    const tools = this.state.tools.map((t) => (t.id === id ? { ...t, ...patch } : t));
-    this.patch({ tools });
+  private setTool(id: string, patch: Partial<Extract<Entry, { kind: "tool" }>>): void {
+    this.patch({
+      entries: this.state.entries.map((e) => (e.kind === "tool" && e.id === id ? { ...e, ...patch } : e)),
+    });
+  }
+
+  /** Turn the prose streamed so far into an entry, if there is any. */
+  private flushStreaming(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      this.patch({ streaming: "" });
+      return;
+    }
+    this.patch({
+      entries: [...this.state.entries, { kind: "agent", id: `a_${Date.now()}_${this.state.entries.length}`, text: trimmed }],
+      streaming: "",
+    });
+  }
+
+  private addEntry(entry: Entry): void {
+    this.patch({ entries: [...this.state.entries, entry] });
+  }
+
+  /** The tool entry for a call id, if the transcript holds one. */
+  private toolEntry(id: string): Extract<Entry, { kind: "tool" }> | undefined {
+    return this.state.entries.find((e): e is Extract<Entry, { kind: "tool" }> => e.kind === "tool" && e.id === id);
   }
 
   /** Send a message and run a turn to completion. */
@@ -199,7 +229,7 @@ export class AgentSession {
 
     this.controller = new AbortController();
     this.patch({
-      messages: [...this.state.messages, { role: "user", text: task }],
+      entries: [...this.state.entries, { kind: "user", id: `u_${Date.now()}`, text: task }],
       streaming: "",
       status: "thinking",
       error: null,
@@ -239,17 +269,18 @@ export class AgentSession {
             break;
 
           case "tool_call":
-            this.patch({
-              tools: [
-                ...this.state.tools,
-                {
-                  id: String(event.callId ?? Math.random()),
-                  name: String(event.tool ?? "tool"),
-                  title: String(event.tool ?? "tool"),
-                  where: "server",
-                  status: "running",
-                },
-              ],
+            // The agent's text so far becomes an entry BEFORE the tool, so the
+            // transcript reads in the order it happened rather than collecting
+            // all the prose above all the calls.
+            this.flushStreaming(reply);
+            reply = "";
+            this.addEntry({
+              kind: "tool",
+              id: String(event.callId ?? Math.random()),
+              name: String(event.tool ?? "tool"),
+              title: String(event.tool ?? "tool"),
+              where: "server",
+              status: "running",
             });
             break;
 
@@ -278,16 +309,21 @@ export class AgentSession {
         if (call && runId) {
           // A local call replaces the server-side placeholder for the same id:
           // the run emitted both, and showing it twice would misreport the work.
-          const existing = this.state.tools.find((t) => t.id === call.toolCallId);
-          if (existing) this.setTool(call.toolCallId, { where: "local", title: call.title });
-          else {
-            this.patch({
-              tools: [
-                ...this.state.tools,
-                { id: call.toolCallId, name: call.name, title: call.title, where: "local", status: "running" },
-              ],
+          if (this.toolEntry(call.toolCallId)) {
+            this.setTool(call.toolCallId, { where: "local", title: call.title });
+          } else {
+            this.flushStreaming(reply);
+            reply = "";
+            this.addEntry({
+              kind: "tool",
+              id: call.toolCallId,
+              name: call.name,
+              title: call.title,
+              where: "local",
+              status: "running",
             });
           }
+          this.writingCallId = call.toolCallId;
           await this.runLocal(runId, call.toolCallId, call.name, call.title, call.rawInput);
           continue;
         }
@@ -314,11 +350,8 @@ export class AgentSession {
       }
     }
 
+    this.flushStreaming(reply);
     this.patch({
-      messages: [
-        ...this.state.messages,
-        ...(reply.trim() ? [{ role: "agent" as const, text: reply.trim(), runId: runId ?? undefined }] : []),
-      ],
       streaming: "",
       status: "idle",
       statusLine: "",
