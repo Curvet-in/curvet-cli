@@ -194,6 +194,42 @@ function ApprovalPrompt({ pending, width }: { pending: Approval; width: number }
   );
 }
 
+/** The prompt line. Identical on the home screen and in a conversation. */
+function InputRow({ input, busy, statusLine }: { input: string; busy: boolean; statusLine: string }) {
+  return (
+    <Text>
+      <Text color="cyan">{"› "}</Text>
+      {input ? <Text>{input}</Text> : <Text color="gray">{busy ? statusLine || "working…" : "Ask anything"}</Text>}
+      {!busy ? <Text color="gray">▌</Text> : null}
+    </Text>
+  );
+}
+
+/**
+ * The status line. Last thing on screen in both layouts, so the details you
+ * check without looking — where you are, what it has cost — never move.
+ */
+function StatusLine(props: {
+  model: string;
+  costUsd: number;
+  turns: number;
+  project: string;
+  git: { branch: string | null; files: number } | null;
+  toolsEnabled: boolean;
+  busy: boolean;
+}) {
+  const dirty = props.git?.files ? ` ${props.git.files} changed` : "";
+  const branch = props.git?.branch ? `  ⎇ ${props.git.branch}${dirty}` : "";
+  const spent = props.costUsd > 0 ? ` · $${props.costUsd.toFixed(4)}` : "";
+  return (
+    <Text color="gray" wrap="truncate">
+      {`${props.model}${spent} · ${props.turns} turn${props.turns === 1 ? "" : "s"} · ${props.project}${branch}`}
+      {props.toolsEnabled ? "" : " · read-only"}
+      {props.busy ? " · esc to stop" : ""}
+    </Text>
+  );
+}
+
 export default function App({ session, cwd, toolsEnabled, model, git, onCommand, onExit }: Props) {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -328,70 +364,98 @@ export default function App({ session, cwd, toolsEnabled, model, git, onCommand,
   const spent = state.costUsd > 0 ? ` · $${state.costUsd.toFixed(4)}` : "";
   const busy = state.status === "thinking" || state.status === "aborting";
 
+  const picker =
+    !state.pending && matches.length > 0 ? (
+      <Box flexDirection="column">
+        {matches.slice(0, 6).map((c) => (
+          <Text key={c.name}>
+            <Text color="cyan">{`/${c.name}${c.arg ? ` ${c.arg}` : ""}`.padEnd(18)}</Text>
+            <Text color="gray">{c.summary}</Text>
+          </Text>
+        ))}
+      </Box>
+    ) : null;
+
+  const prompt = state.pending ? (
+    <ApprovalPrompt pending={state.pending} width={width} />
+  ) : (
+    <InputRow input={input} busy={busy} statusLine={state.statusLine} />
+  );
+
+  const status = (
+    <StatusLine
+      model={model}
+      costUsd={state.costUsd}
+      turns={state.turns}
+      project={project}
+      git={git}
+      toolsEnabled={toolsEnabled}
+      busy={busy}
+    />
+  );
+
+  // ── Home ──────────────────────────────────────────────────────────────────
+  // Nothing has been said yet, so nothing needs the height. The whole cluster —
+  // mark, greeting, prompt, status — sits together in the middle, where the eye
+  // already is. Pinning the input to the bottom of an empty 60-row window puts
+  // it a screen away from the only thing on it.
+  if (state.entries.length === 0 && !state.streaming) {
+    const roomForMark = rows >= 20 && cols >= MARK_WIDTH + 4;
+    return (
+      <Box flexDirection="column" width={cols} height={rows} alignItems="center" justifyContent="center">
+        {roomForMark
+          ? CURVET_MARK.map((l, i) => (
+              <Text key={i} color="cyan">
+                {l}
+              </Text>
+            ))
+          : null}
+
+        <Box marginTop={roomForMark ? 1 : 0} flexDirection="column" alignItems="center">
+          {/* An explicit colour, not the terminal default: `bold` alone emits
+              nothing at all where colour is unavailable, and a greeting that can
+              silently vanish is worse than none. */}
+          <Text bold color="white">
+            What can I do for you?
+          </Text>
+          <Text color="gray">
+            {toolsEnabled ? `reading and editing ${project}` : "no file access here — pass --tools"}
+          </Text>
+        </Box>
+
+        <Box marginTop={1} flexDirection="column" width={Math.min(cols - 4, 72)}>
+          {state.error ? <Text color="red">{state.error}</Text> : null}
+          {picker}
+          {/* A border, only here. Centred text above a full-width left-aligned
+              prompt reads as a stray line; the box is what makes the cluster one
+              thing. In conversation the transcript gives the prompt its context
+              and a border would just be furniture. */}
+          <Box borderStyle="round" borderColor="gray" paddingX={1}>
+            {prompt}
+          </Box>
+          <Box paddingX={1} flexDirection="column">
+            {status}
+            <Text color="gray">/ for commands · esc stops a turn · ctrl-c leaves</Text>
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
+
+  // ── In conversation ───────────────────────────────────────────────────────
+  // Now the transcript is the thing, so it takes the height and the prompt sits
+  // where a prompt belongs.
   return (
     <Box flexDirection="column" width={cols} height={rows}>
       <Box flexDirection="column" flexGrow={1} paddingX={1} overflow="hidden">
-        {lines.length === 0 ? (
-          <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center">
-            {/* The mark only when there is room for it. On a short window the
-                greeting matters more than the picture. */}
-            {rows >= 18 && cols >= MARK_WIDTH + 4
-              ? CURVET_MARK.map((l, i) => (
-                  <Text key={i} color="cyan">
-                    {l}
-                  </Text>
-                ))
-              : null}
-            <Box marginTop={1}>
-              <Text bold>What can I do for you?</Text>
-            </Box>
-            <Text color="gray">
-              {toolsEnabled ? `reading and editing ${project}` : "no file access here — pass --tools"}
-            </Text>
-            <Text color="gray">/ for commands · esc stops a turn · ctrl-c leaves</Text>
-          </Box>
-        ) : (
-          lines
-        )}
+        {lines}
       </Box>
 
       <Box flexDirection="column" flexShrink={0} paddingX={1}>
         {state.error ? <Text color="red">{state.error}</Text> : null}
-
-        {/* The picker. Typing `/` alone lists everything, which is how anyone
-            discovers what exists — and the reason the list is kept short. */}
-        {!state.pending && matches.length > 0 ? (
-          <Box flexDirection="column">
-            {matches.slice(0, 6).map((c) => (
-              <Text key={c.name}>
-                <Text color="cyan">{`/${c.name}${c.arg ? ` ${c.arg}` : ""}`.padEnd(18)}</Text>
-                <Text color="gray">{c.summary}</Text>
-              </Text>
-            ))}
-          </Box>
-        ) : null}
-
-        {state.pending ? (
-          <ApprovalPrompt pending={state.pending} width={width} />
-        ) : (
-          <Text>
-            <Text color="cyan">{"› "}</Text>
-            {input ? (
-              <Text>{input}</Text>
-            ) : (
-              <Text color="gray">{busy ? state.statusLine || "working…" : "Ask anything"}</Text>
-            )}
-            {!busy ? <Text color="gray">▌</Text> : null}
-          </Text>
-        )}
-
-        {/* Last line, always: the things you check without looking — where you
-            are, what it has cost — belong in one fixed place. */}
-        <Text color="gray" wrap="truncate">
-          {`${model}${spent} · ${state.turns} turn${state.turns === 1 ? "" : "s"} · ${project}${branch}`}
-          {toolsEnabled ? "" : " · read-only"}
-          {busy ? " · esc to stop" : ""}
-        </Text>
+        {picker}
+        {prompt}
+        {status}
       </Box>
     </Box>
   );

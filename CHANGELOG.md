@@ -4,8 +4,11 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## 0.10.0
 
-- **A home screen.** An empty session opens on the Curvet mark, a greeting, and
-  where you are — rather than a blank transcript that gives no clue what to type.
+- **A home screen.** An empty session opens on the Curvet mark, a greeting, where
+  you are, and the prompt — all together in the middle of the window rather than
+  a blank transcript with the input a screen away at the bottom. Once you say
+  something it becomes the conversation view, transcript first and prompt pinned
+  where a prompt belongs.
 
 - **Slash commands.** `/` lists them; typing narrows. Everything offered actually
   works, because a picker listing something the session answers "not implemented"
