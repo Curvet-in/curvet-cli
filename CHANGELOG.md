@@ -2,6 +2,74 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## 0.10.0
+
+- **A home screen.** An empty session opens on the Curvet mark, a greeting, where
+  you are, and the prompt — all together in the middle of the window rather than
+  a blank transcript with the input a screen away at the bottom. Once you say
+  something it becomes the conversation view, transcript first and prompt pinned
+  where a prompt belongs.
+
+- **Slash commands.** `/` lists them; typing narrows. Everything offered actually
+  works, because a picker listing something the session answers "not implemented"
+  to is worse than no picker.
+
+  `/status` asks the SERVER what it has enabled — agents, memory, connectors,
+  plan approval — rather than printing what the client assumed at startup. The
+  two drift, and the client's copy is the one that is wrong.
+
+  `/model` switches the orchestrator mid-session · `/tools` says what the agent
+  may do on this machine · `/cost`, `/runs`, `/log`, `/undo`, `/clear`, `/help`,
+  `/exit`.
+
+
+- **`curvet agent` with no task opens a full-screen session.** Multi-turn, so a
+  follow-up can say "now change that one" and be understood. Panes for the
+  conversation, the tool timeline and the last diff, with the model, turn count,
+  live cost and elapsed time in the header.
+
+  ```
+  › read src/server.ts and tell me the port
+  ✓ Read src/server.ts
+  The server listens on port 8412.
+
+  › now change that port to 9300
+  ✓ Write src/server.ts
+    - const PORT = 8412;
+    + const PORT = 9300;
+  Done — updated 8412 → 9300.
+
+  › Ask anything▌
+  claude-sonnet-4-6 · $0.14 · 2 turns · demo-proj  ⎇ main 3 changed
+  ```
+
+  One column, with tool calls in the transcript at the point the agent made
+  them — a call belongs in the conversation it was part of, not in a column
+  beside it, and a side pane takes width from the only thing anyone reads.
+
+  Approvals replace the input bar, so a diff appears exactly where your attention
+  already is and there is nothing to type past. `y` applies it. Esc stops a turn,
+  Ctrl-C leaves. The last line is always the status bar: model, spend, turns,
+  project, branch and how many files are dirty.
+
+  A task on the command line still runs one-shot and inline, unchanged — that is
+  what pipes and CI use, and it should not open a UI. `--json` is unchanged too.
+
+  ink is loaded through a dynamic import, so nothing else pays for React: only a
+  session actually loads it.
+
+- The session engine holds no rendering at all. That is what makes an approval
+  work in a full-screen app — it is state the UI subscribes to, rather than a
+  question written to stderr — and it is what a desktop client would reuse.
+
+- **Pasting into the input works.** A paste arrives as one chunk rather than as
+  keystrokes, and a trailing newline now submits instead of landing in the buffer
+  as an invisible character that could never be typed out.
+
+- **A terminal reporting a zero window size no longer renders an invisible UI.**
+  Some CI runners and multiplexers report 0 rather than nothing, and `?? 80` does
+  not catch 0. Narrow terminals drop the side pane instead of squeezing both.
+
 ## 0.9.0
 
 - **`curvet login` now asks which scopes you want.** Before this, the only way to

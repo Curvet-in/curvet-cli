@@ -33,7 +33,8 @@ switch between accounts or environments.
 | `curvet models [--type chat] [--capability] [--include all]` | List models; keyless via the public catalogue, per-app (with rate limits) once logged in |
 | `curvet chat "prompt"` | Chat with streaming output; add `-m`, `-s`, `-t`, `--max-tokens` |
 | `curvet chat --repl` | Interactive session: switch models mid-conversation, track spend |
-| `curvet agent "task"` | Run a Curvet agent and watch it work — tool timeline, deliverables, live cost |
+| `curvet agent` | A full-screen session: multi-turn, tool timeline, diffs approved in place |
+| `curvet agent "task"` | One-shot — streams inline and exits; what pipes and CI want |
 | `curvet agent --no-tools "task"` | Same, but with no access to this machine at all |
 | `curvet commit` | Write a commit message for the staged diff, in your repo's own style |
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
@@ -148,7 +149,57 @@ absent from the OpenAI-compatible surface and answer all at once.
 ## Agents
 
 ```bash
-curvet login --scope agency:run        # once — not granted by default
+curvet login --scope agency:run   # once — not granted by default
+curvet agent                      # a session
+```
+
+Run it with no task and you get a full-screen session: multi-turn, so a follow-up
+can say "now change that one" and be understood, with the conversation, the tool
+timeline and the last diff each in their own pane.
+
+```
+› read src/server.ts and tell me the port
+✓ Read src/server.ts
+The server listens on port 8412.
+
+› now change that port to 9300
+✓ Write src/server.ts
+  - const PORT = 8412;
+  + const PORT = 9300;
+Done — updated 8412 → 9300.
+
+› Ask anything▌
+claude-sonnet-4-6 · $0.14 · 2 turns · demo-proj  ⎇ main 3 changed
+```
+
+An empty session opens on a home screen — the mark, where you are, and what to
+press. `/` lists the commands:
+
+```
+/help             what these commands do
+/model [id]       show or switch the orchestrator model
+/status           what this server has enabled — agents, memory, connectors
+/tools            what the agent may do on this machine
+/cost             what this session has spent
+/runs             recent runs on your account
+/log              what the agent has read and written here
+/undo             put back the files this session changed
+/clear            start a fresh conversation, keeping the window
+/exit             leave
+```
+
+`/status` asks the server rather than reciting what the client assumed when it
+started.
+
+Tool calls appear in the conversation at the point the agent made them. Diffs are
+approved where the input is — `y` applies, `n` declines. Esc stops a turn,
+Ctrl-C leaves. The bottom line always tells you the model, the spend, where you
+are and how much is uncommitted.
+
+Give it a task on the command line instead and it runs once and exits, printing
+inline, which is what pipes and CI want:
+
+```bash
 curvet agent "go through my unread email and draft replies to anything from a customer"
 ```
 

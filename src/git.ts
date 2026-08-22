@@ -27,6 +27,29 @@ export async function isRepo(): Promise<boolean> {
   }
 }
 
+/**
+ * Branch and changed-file count for the status bar, or null outside a repo.
+ *
+ * Never throws and never blocks the session on git: a repo in a strange state —
+ * mid-rebase, no commits yet, a broken index — should cost the status bar a
+ * line, not stop the agent from starting.
+ */
+export async function repoStatus(cwd?: string): Promise<{ branch: string | null; files: number } | null> {
+  try {
+    const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)).trim();
+    let files = 0;
+    try {
+      const porcelain = await git(["status", "--porcelain"], cwd);
+      files = porcelain.split("\n").filter((l) => l.trim()).length;
+    } catch {
+      /* a countable status is a bonus, not a requirement */
+    }
+    return { branch: branch === "HEAD" ? null : branch, files };
+  } catch {
+    return null;
+  }
+}
+
 export async function stagedDiff(): Promise<string> {
   // No colour, no ext diff, and a generous context window: the model reads this.
   return git(["--no-pager", "diff", "--cached", "--no-color", "--no-ext-diff", "-U8"]);
