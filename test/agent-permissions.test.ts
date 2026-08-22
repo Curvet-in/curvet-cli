@@ -8,6 +8,8 @@ import {
   isInside,
   needsBlanketConfirm,
   findProjectRoot,
+  refusalReason,
+  denialMessage,
 } from "../src/agent/permissions.js";
 import { execute, type ToolContext } from "../src/agent/tools.js";
 import type { FileDiff } from "../src/agent/diff.js";
@@ -46,6 +48,21 @@ beforeAll(async () => {
 afterAll(async () => {
   await fs.rm(path.dirname(root), { recursive: true, force: true });
 });
+
+/**
+ * Run `body` with a symlink in place, and remove it even if an assertion throws.
+ * A link left behind by a failing test breaks every test after it, which turns
+ * one red result into a page of them and hides which one was real.
+ */
+async function withLink(link: string, target: string, body: () => Promise<void>): Promise<void> {
+  await fs.rm(link, { force: true });
+  await fs.symlink(target, link);
+  try {
+    await body();
+  } finally {
+    await fs.rm(link, { force: true });
+  }
+}
 
 /** A context that records whether it was asked, and answers however we say. */
 function ctxWith(answer: boolean): ToolContext & { asked: string[] } {
@@ -180,6 +197,79 @@ describe("classifyPath", () => {
     expect((await classifyPath(root, "../elsewhere/missing.txt")).decision).toBe("confirm");
     expect((await classifyPath(root, "../elsewhere/.env")).decision).toBe("deny");
   });
+
+  // ── Links in the MIDDLE of the path ────────────────────────────────────────
+  //
+  // The cases above all name a file that already exists, so realpath resolves the
+  // whole path and the boundary holds. A file that does NOT exist yet is the
+  // interesting one, because that is every create: realpath throws ENOENT on the
+  // missing leaf, and if the fallback is "judge the string we were handed" then a
+  // symlinked PARENT is never resolved at all. Existence decides the boundary,
+  // which is exactly backwards — the non-existent leaf IS the write.
+  it("resolves a symlinked PARENT even though the leaf does not exist yet", async () => {
+    await withLink(path.join(root, "escape"), outside, async () => {
+      const v = await classifyPath(root, "escape/brand-new.txt");
+      expect(v.decision).toBe("confirm");
+      expect(v.abs).toBe(path.join(outside, "brand-new.txt"));
+    });
+  });
+
+  it("denies a NEW file under a link into a secret directory", async () => {
+    // ~/.ssh/authorized_keys is the sharp version: the name matches no secret
+    // pattern, the directory it lands in is the whole point, and the file not
+    // existing yet is what makes it worth writing.
+    const secretDir = path.join(path.dirname(root), ".ssh");
+    await fs.mkdir(secretDir, { recursive: true });
+    await withLink(path.join(root, "keys"), secretDir, async () => {
+      const v = await classifyPath(root, "keys/authorized_keys");
+      expect(v.decision).toBe("deny");
+    });
+  });
+
+  it("resolves a DANGLING link, which points somewhere precisely because nothing is there yet", async () => {
+    // A link whose target does not exist still resolves for open(O_CREAT): the
+    // write follows it and creates the target. So it has to be classified by
+    // where it points, and realpath refuses to tell us — it throws on the link
+    // itself, not only on the leaf.
+    await withLink(path.join(root, "dangling.txt"), path.join(outside, "not-yet.txt"), async () => {
+      const v = await classifyPath(root, "dangling.txt");
+      expect(v.decision).toBe("confirm");
+      expect(v.abs).toBe(path.join(outside, "not-yet.txt"));
+    });
+  });
+
+  it("applies .. after resolving a link, not before", async () => {
+    // POSIX resolves `..` against where the link LANDED. Collapsing it textually
+    // first computes a different path than the kernel will open.
+    await withLink(path.join(root, "hop"), outside, async () => {
+      const v = await classifyPath(root, "hop/../elsewhere-sibling.txt");
+      expect(v.abs).toBe(path.join(path.dirname(outside), "elsewhere-sibling.txt"));
+    });
+  });
+
+  it("treats a project reached THROUGH a link as the project it is", async () => {
+    // /tmp is a link to /private/tmp on macOS, so this is the ordinary case, not
+    // an exotic one. Comparing an unresolved root against a resolved target makes
+    // every file in the project look like it is outside the project.
+    const alias = path.join(path.dirname(root), "project-alias");
+    await withLink(alias, root, async () => {
+      const v = await classifyPath(alias, "src/index.ts");
+      expect(v.decision).toBe("allow");
+    });
+  });
+
+  it("gives up on a symlink loop instead of hanging", async () => {
+    const a = path.join(root, "loop-a");
+    const b = path.join(root, "loop-b");
+    await withLink(a, b, async () => {
+      await withLink(b, a, async () => {
+        const v = await classifyPath(root, "loop-a/whatever.txt");
+        // Any decision is acceptable except crashing or spinning; what matters is
+        // that it returns, and that it does not report a loop as a safe local file.
+        expect(["deny", "confirm", "allow"]).toContain(v.decision);
+      });
+    });
+  });
 });
 
 describe("findProjectRoot", () => {
@@ -280,6 +370,33 @@ describe("write_file", () => {
     expect(await fs.readFile(path.join(root, ".env"), "utf8")).toContain("super-secret-value");
   });
 
+  it("DENIES a write through a symlinked directory, and creates nothing", async () => {
+    // The escape this whole block exists for. `escape` is a link out of the
+    // project; `notes-new.md` does not exist. If the parent is not resolved, this
+    // reads as an ordinary local create and the file lands outside the project.
+    const { ctx, shown } = writeCtx(true);
+    await withLink(path.join(root, "escape"), outside, async () => {
+      const out = await execute(ctx, "write_file", {
+        path: "escape/notes-new.md",
+        content: "written through a link",
+      });
+      expect(out.ok).toBe(false);
+      expect(out.error).toMatch(/outside this project/);
+      expect(shown).toHaveLength(0);
+      await expect(fs.access(path.join(outside, "notes-new.md"))).rejects.toThrow();
+    });
+  });
+
+  it("DENIES a write through a DANGLING link, which would have created the target", async () => {
+    const { ctx, shown } = writeCtx(true);
+    await withLink(path.join(root, "pending.md"), path.join(outside, "created-by-link.md"), async () => {
+      const out = await execute(ctx, "write_file", { path: "pending.md", content: "x" });
+      expect(out.ok).toBe(false);
+      expect(shown).toHaveLength(0);
+      await expect(fs.access(path.join(outside, "created-by-link.md"))).rejects.toThrow();
+    });
+  });
+
   it("DENIES a write outside the project rather than confirming it", async () => {
     // Reading a sibling package is ordinary work. Writing to one is not something
     // an agent pointed at this repository should do, and a prompt would only be a
@@ -336,6 +453,33 @@ describe("write_file", () => {
     const out = await execute(ctx, "write_file", { path: "src/x.ts" });
     expect(out.ok).toBe(false);
     expect(out.error).toMatch(/complete new contents/);
+  });
+});
+
+describe("refusalReason", () => {
+  it("tells a secret apart from a boundary, because they are different rules", async () => {
+    // The one-shot renderer used to print "is a protected file" for both. A write
+    // stopped by the project boundary is not a protected file, and saying so
+    // teaches the user a rule that does not exist.
+    const secret = refusalReason(denialMessage(".env", ".env file"));
+    expect(secret).toMatch(/\.env file/);
+
+    const ctx = { cwd: root, confirm: async () => true, confirmWrite: async () => true } as ToolContext;
+    const out = await execute(ctx, "write_file", { path: "../elsewhere/x.md", content: "y" });
+    expect(refusalReason(out.error)).toMatch(/outside this project/);
+    expect(refusalReason(out.error)).not.toMatch(/protected file/);
+  });
+
+  it("never renders an empty line", () => {
+    expect(refusalReason(undefined)).toBeTruthy();
+    expect(refusalReason("")).toBeTruthy();
+    expect(refusalReason("Refused: ")).toBeTruthy();
+  });
+
+  it("stops at the first sentence — the rest is written for the model", () => {
+    // The tail ("Do not try another path to the same file…") is an instruction to
+    // the model, and printing it at the user reads as the CLI addressing them.
+    expect(refusalReason(denialMessage("k.pem", "private key or certificate"))).not.toMatch(/Do not try/i);
   });
 });
 

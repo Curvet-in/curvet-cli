@@ -11,7 +11,7 @@ import {
   type Curvet,
 } from "@curvet/sdk";
 import { SUPPORTED_TOOLS, execute, type ToolContext } from "../agent/tools.js";
-import { classifyPath, needsBlanketConfirm, findProjectRoot } from "../agent/permissions.js";
+import { classifyPath, needsBlanketConfirm, findProjectRoot, refusalReason } from "../agent/permissions.js";
 import type { FileDiff } from "../agent/diff.js";
 import { saveBackup, undoRun, lastRunWithWrites } from "../agent/backup.js";
 import { record as auditRecord, readRecent, auditPath } from "../agent/audit.js";
@@ -483,7 +483,7 @@ async function runLocalTool(
   // The user should see a refusal happen, in their own terminal, in their own
   // words — not infer it from the model's paraphrase a few seconds later.
   if (decision === "denied" && !opts.json) {
-    process.stderr.write(ui.error(`  ⌂ refused — ${call.title} is a protected file\n`));
+    process.stderr.write(ui.error(`  ⌂ refused — ${refusalReason(outcome.error)}\n`));
   }
 
   await auditRecord({
