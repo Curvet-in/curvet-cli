@@ -462,11 +462,39 @@ things an app key cannot do, because an app key authenticates an *app*, and
 letting one mint or rotate another would make revoking it meaningless.
 
 ```bash
-curvet login                              # opens a browser, prints a code
-curvet login --scope enterprise:admin     # also administer your org
+curvet login                              # asks what to allow, opens a browser
+curvet login --scope agency:run           # allow `curvet agent`, no prompt
+curvet login --all                        # every scope, no prompt
 curvet login --no-browser                 # over SSH or in a container
 curvet logout
 ```
+
+It asks before it opens anything, because the defaults are apps-only and the
+scope `curvet agent` needs is not among them:
+
+```console
+Signing in will let this device:
+  · see your apps and their usage
+  · create, configure and delete your apps
+  · rotate your app keys and read your app secrets
+
+Anything else?
+  [1] run agents as you — spending your credits, and using tools that can send email…
+      agency:run — needed for `curvet agent`
+  [2] administer your organization, including minting enterprise API keys
+      enterprise:admin — org admins only
+
+  numbers to add, or Enter for none:
+```
+
+`agency:run` is kept out of the default deliberately: it is the only grant that
+spends money on its own, so a token minted to rotate an app key should not also
+be able to run agents. That is a reason to leave it out of the default, not a
+reason to hide it — `curvet login --help` lists every scope, and `curvet auth
+status` shows which ones your token actually holds.
+
+With no terminal — piped, or in CI — nothing is asked and nothing extra is
+granted. Use `--scope` there.
 
 ```console
 $ curvet login
