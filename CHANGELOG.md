@@ -40,6 +40,20 @@ All notable changes to `@curvet/cli` are documented here.
   the project boundary is not a protected file, and describing it as one teaches
   a rule that does not exist. It now prints the reason that actually fired.
 
+## Unreleased
+
+- **`--json` now actually emits JSONL.** The flag says "one per line" and the
+  live event stream went through the same indenting printer as `--runs` and
+  `--replay`, so one run produced 21 events across 173 lines. `jq` tolerates
+  concatenated JSON, which is why the documented example kept working and the
+  defect stayed invisible — but anything reading a line at a time, which is the
+  ordinary way to consume NDJSON, got a fragment of an object.
+
+  A stream and a document are different outputs; they only looked like one
+  function because both are "print some JSON". Whole-document output (`--runs`,
+  `--log`, `--replay`, `--undo`) is still indented, which is right for something
+  a person reads.
+
 ## 0.10.0
 
 - **A home screen.** An empty session opens on the Curvet mark, a greeting, where

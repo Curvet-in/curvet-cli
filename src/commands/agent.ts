@@ -17,7 +17,7 @@ import { saveBackup, undoRun, lastRunWithWrites } from "../agent/backup.js";
 import { record as auditRecord, readRecent, auditPath } from "../agent/audit.js";
 import { resolveProfile, type ResolvedProfile } from "../config.js";
 import { makeClient, requireCliToken } from "../client.js";
-import { fail, ok, printJson, table, warn } from "../output.js";
+import { fail, ok, printJson, printJsonLine, table, warn } from "../output.js";
 
 /**
  * `curvet agent` — run a Curvet agent from the terminal and watch it work.
@@ -690,7 +690,9 @@ async function streamRun(
       if (event.type === "error") failed = true;
 
       if (opts.json) {
-        printJson(event);
+        // One line per event — see printJsonLine. This is the CI-facing
+        // surface, and it is consumed a line at a time.
+        printJsonLine(event);
       } else {
         renderer.handle(event);
       }

@@ -10,8 +10,28 @@ import {
 
 export const isTTY = process.stdout.isTTY === true;
 
+/**
+ * A whole document, indented for a person to read. For `--runs`, `--log`,
+ * `--replay` and `--undo`, which each print ONE thing and then exit.
+ */
 export function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+}
+
+/**
+ * One event, one line — the JSONL the `--json` flag actually promises.
+ *
+ * `printJson` was used for the live event stream too, which indented every
+ * event across a dozen lines. `jq` tolerates that, so the documented example
+ * kept working and the defect stayed invisible; anything reading a line at a
+ * time — `while read`, `split('\n')`, a log shipper, any of the ordinary ways
+ * to consume NDJSON — got a fragment of an object and broke.
+ *
+ * A stream and a document are different outputs. They only looked like one
+ * function because both are "print some JSON".
+ */
+export function printJsonLine(value: unknown): void {
+  console.log(JSON.stringify(value));
 }
 
 /** Mask a key for display: `app_12ab…89cd`. */
