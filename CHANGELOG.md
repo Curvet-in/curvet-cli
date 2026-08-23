@@ -4,6 +4,21 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## Unreleased
 
+- **`--json` now actually emits JSONL.** The flag says "one per line" and the
+  live event stream went through the same indenting printer as `--runs` and
+  `--replay`, so one run produced 21 events across 173 lines. `jq` tolerates
+  concatenated JSON, which is why the documented example kept working and the
+  defect stayed invisible — but anything reading a line at a time, which is the
+  ordinary way to consume NDJSON, got a fragment of an object.
+
+  A stream and a document are different outputs; they only looked like one
+  function because both are "print some JSON". Whole-document output (`--runs`,
+  `--log`, `--replay`, `--undo`) is still indented, which is right for something
+  a person reads.
+
+## 0.10.1
+
+
 - **Fixed: a write could escape the project through a symlinked parent.** The
   boundary check resolved paths with `fs.realpath`, which throws the moment any
   component is missing — so a path whose leaf did not exist yet was judged as the
