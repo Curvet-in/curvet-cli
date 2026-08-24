@@ -47,6 +47,33 @@ node dist/index.js --version >/dev/null
 # Bump (optional). npm version commits and creates the vX.Y.Z tag.
 if [ -n "${BUMP}" ]; then
   echo "==> Bumping ${BUMP}..."
+
+  # File the "Unreleased" notes under the version they are about to become,
+  # BEFORE npm version commits — so the release commit carries a changelog that
+  # matches what shipped.
+  #
+  # This did not happen for 0.10.1 or 0.10.2: both went out with their entries
+  # still headed "Unreleased", and the next change added a SECOND "Unreleased"
+  # above them. Every release quietly made the file less true, and every fix was
+  # a manual reshuffle after the fact.
+  # Computed, not asked for: `npm version --no-git-tag-version` would tell us,
+  # but it does it by WRITING package.json and trusting a later checkout to put
+  # it back. A release script should not leave a half-bumped manifest behind if
+  # it exits between those two steps.
+  NEXT="$(BUMP="${BUMP}" node -p "
+    const [a,b,c] = require('./package.json').version.split('.').map(Number);
+    ({ major: [a+1,0,0], minor: [a,b+1,0], patch: [a,b,c+1] }[process.env.BUMP] || []).join('.')
+  ")"
+  if [ -n "${NEXT}" ] && grep -q '^## Unreleased' CHANGELOG.md; then
+    # Only the FIRST occurrence, and only when there is something under it.
+    awk -v ver="## ${NEXT}" '
+      !done && /^## Unreleased$/ { print ver; done=1; next }
+      { print }
+    ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+    git add CHANGELOG.md
+    echo "==> Filed CHANGELOG 'Unreleased' under ${NEXT}"
+  fi
+
   npm version "${BUMP}" -m "release: v%s"
 fi
 
