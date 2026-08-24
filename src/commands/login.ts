@@ -224,16 +224,45 @@ export function loginCommand(): Command {
       }
 
       const name = profile.name;
-      config.profiles[name] = {
-        ...config.profiles[name],
-        cliToken: result.token,
-        // Only when this login created the account's first app, and never over
-        // a key that is already there.
-        ...(result.defaultApp && !config.profiles[name]?.appKey
-          ? { appKey: result.defaultApp.appKey }
-          : {}),
-      };
+      const existingKey = config.profiles[name]?.appKey;
+      config.profiles[name] = { ...config.profiles[name], cliToken: result.token };
+      if (result.defaultApp && !existingKey) {
+        config.profiles[name].appKey = result.defaultApp.appKey;
+      }
       await saveConfig(config);
+
+      // A profile carries TWO credentials, and they can name two different
+      // people. The token authenticates `agent`, `apps` and `ent`; the app key
+      // authenticates `balance`, `chat`, `image` and everything on the
+      // playground. Signing in only replaces the token — so logging in as a
+      // second account on a machine that already had a key left the playground
+      // half of the CLI pointed at the FIRST account, silently spending its
+      // credits and reporting its balance.
+      //
+      // Keeping a key that is already there is right when it belongs to the
+      // person signing in. The bug was never checking. So: check, and when it
+      // belongs to somebody else, replace it and say so out loud — a credential
+      // swapped underneath you is exactly the thing to be told about.
+      const owned = await listOwnedAppKeys(name);
+      if (existingKey && owned && !owned.includes(existingKey)) {
+        const replacement = result.defaultApp?.appKey ?? owned[0];
+        const fresh = await loadConfig();
+        if (replacement) {
+          fresh.profiles[name] = { ...fresh.profiles[name], appKey: replacement };
+        } else {
+          delete fresh.profiles[name]?.appKey;
+        }
+        await saveConfig(fresh);
+        console.log(
+          warn(
+            `the app key saved here belonged to a different account (${maskKey(existingKey)}).\n` +
+              (replacement
+                ? `  Replaced with this account's key ${maskKey(replacement)}.`
+                : "  Removed it — create one with `curvet apps create <name>`.") +
+              "\n  Until now, `balance`, `chat` and `image` were using that other account.",
+          ),
+        );
+      }
 
       if (opts.json) {
         printJson({ ...result, token: maskKey(result.token), profile: name });
@@ -251,12 +280,37 @@ export function loginCommand(): Command {
         console.log(warn(`not granted: ${refused.join(", ")} — your account is not eligible.`));
       }
       if (result.defaultApp) {
+        // Do not claim to have saved it when an existing key was kept — the old
+        // wording said "saved its key" unconditionally, which was untrue in the
+        // one case that matters.
+        const saved = (await resolveProfile(name)).appKey === result.defaultApp.appKey;
         console.log(
-          ok(`created your first app "${result.defaultApp.name}" and saved its key`),
+          ok(
+            saved
+              ? `created your first app "${result.defaultApp.name}" and saved its key`
+              : `created your first app "${result.defaultApp.name}" — kept the key already in this profile`,
+          ),
         );
         console.log(pc.dim(`  ${maskKey(result.defaultApp.appKey)} — try \`curvet chat "hello"\``));
       }
     });
+}
+
+/**
+ * The app keys this account owns, or null when we could not ask.
+ *
+ * Null and empty mean different things: null is "no answer", which must not be
+ * read as "the key you have is foreign". A network blip should never delete
+ * somebody's credential.
+ */
+async function listOwnedAppKeys(profileName: string): Promise<string[] | null> {
+  try {
+    const client = makeClient(await resolveProfile(profileName));
+    const apps = await client.apps.list();
+    return apps.map((a) => a.appKey).filter((k): k is string => typeof k === "string");
+  } catch {
+    return null;
+  }
 }
 
 export function logoutCommand(): Command {

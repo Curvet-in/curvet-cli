@@ -5,13 +5,28 @@ import { resolveProfile } from "../config.js";
 import { makeClient, requireAppKey } from "../client.js";
 import { printJson, trimNumber } from "../output.js";
 
-function renderBalance(info: BalanceInfo): string {
+/**
+ * What the balance actually is, bucket by bucket.
+ *
+ * The buckets are NOT interchangeable and the labels have to say which is which.
+ * On a shared-org account the API's `walletCredits` is the ORGANISATION's pool,
+ * while `personalCredits` — the money that is actually yours — can be zero. This
+ * used to print `walletCredits` under the label "personal credits", so an
+ * account with nothing of its own read as having several hundred credits, and
+ * the number disagreed with every other surface that reports a personal balance.
+ *
+ * `personalCredits` is the field to trust for "yours". `walletCredits` is the
+ * wallet the spend will come out of, which on a shared plan is the company's.
+ */
+export function renderBalance(info: BalanceInfo): string {
   const lines: string[] = [];
   lines.push(`${pc.bold("Available:")} $${trimNumber(info.totalAvailableUSD)}`);
   const b = info.breakdown;
   if (b) {
-    if (b.walletCredits != null)
-      lines.push(`  personal credits   ${trimNumber(b.walletCredits)}`);
+    // `personalCredits` when the server sends it; `walletCredits` only as a
+    // fallback for older servers, where the two were the same thing.
+    const personal = b.personalCredits ?? b.walletCredits;
+    if (personal != null) lines.push(`  personal credits   ${trimNumber(personal)}`);
     if (b.isEnterprise) {
       if (b.enterpriseCredits != null)
         lines.push(
@@ -20,7 +35,10 @@ function renderBalance(info: BalanceInfo): string {
               ? pc.dim(` (${trimNumber(b.enterpriseSpendable)} spendable under cap)`)
               : ""),
         );
-      if (b.drawsFromPool && b.orgPoolCredits != null)
+      // Shown whenever there IS a pool, not only when `drawsFromPool` is set —
+      // the server does not always send that flag, and a pool the spend comes
+      // out of is exactly what the user needs to see.
+      if (b.orgPoolCredits != null)
         lines.push(
           `  org pool           ${trimNumber(b.orgPoolCredits)}` +
             (b.orgPoolSpendable != null && b.orgPoolSpendable !== b.orgPoolCredits
