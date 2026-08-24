@@ -16,6 +16,32 @@ All notable changes to `@curvet/cli` are documented here.
   `--log`, `--replay`, `--undo`) is still indented, which is right for something
   a person reads.
 
+## Unreleased
+
+- **`edit_file` — change part of a file instead of rewriting it.** `write_file`
+  takes the complete new contents, so changing one line of a 950-line file meant
+  reproducing the other 949: about 10,000 output tokens for a one-line change to
+  `src/commands/agent.ts`, and a 900-line diff to approve with the real change
+  buried in it. The diff was the worse half — an approval nobody can read has
+  stopped being an approval — and re-emitting a whole file is exactly where a
+  model quietly drops something in code it was never editing.
+
+  Now the diff you see is the change. A one-line edit shows one line.
+
+  The match is exact, and every ambiguity is a refusal rather than a best guess:
+  text that is not found, text that appears more than once without
+  `replace_all`, an empty `old_string`, an unchanged string, a file that does not
+  exist. An edit tool that guesses where the model meant lands in the wrong place
+  while showing a diff that looks entirely plausible.
+
+  A near-miss on line endings or trailing whitespace — the usual way an exact
+  match fails on a real checkout — is named in the error and still refused. That
+  turns an unactionable failure into a one-line fix without silently rewriting
+  bytes you did not approve.
+
+  Edits obey exactly the same boundary as writes: no secrets, nothing outside the
+  project, nothing through a symlinked parent.
+
 ## 0.10.1
 
 
