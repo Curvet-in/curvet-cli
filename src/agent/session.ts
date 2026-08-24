@@ -246,18 +246,48 @@ export class AgentSession {
 
   /** Send a message and run a turn to completion. */
   async send(text: string): Promise<void> {
-    const task = text.trim();
-    if (!task || this.state.status !== "idle") return;
+    const typed = text.trim();
+    if (!typed || this.state.status !== "idle") return;
 
     this.controller = new AbortController();
     this.patch({
-      entries: [...this.state.entries, { kind: "user", id: `u_${Date.now()}`, text: task }],
+      // The TRANSCRIPT keeps what the user typed, `@src/foo.ts` and all. It is
+      // what they wrote, it is short, and it is what history() will replay.
+      entries: [...this.state.entries, { kind: "user", id: `u_${Date.now()}`, text: typed }],
       streaming: "",
       status: "thinking",
       error: null,
       statusLine: "",
       runId: null,
     });
+
+    // Attachments ride in THIS turn's task and not in history, on purpose. A
+    // file re-sent on every later turn costs quadratically over the rest of the
+    // run, which is the same reasoning behind the tool-output caps — and the
+    // model does not need it re-sent, because it now knows the exact path and
+    // has read_file.
+    let task = typed;
+    if (this.opts.toolsEnabled) {
+      const { resolveMentions } = await import("./mentions.js");
+      const { task: expanded, resolved } = await resolveMentions(typed, {
+        cwd: this.opts.cwd,
+        confirm: async (question, detail) => {
+          const { approved } = await this.park({ kind: "read", id: `m_${Date.now()}`, title: question, detail: detail ?? "" });
+          return approved;
+        },
+      });
+      task = expanded;
+      for (const r of resolved) {
+        this.addEntry({
+          kind: "tool",
+          id: `mention_${r.path}_${Date.now()}`,
+          name: "attach",
+          title: r.attached ? `Attached ${r.path}${r.truncated ? " (truncated)" : ""}` : `${r.path} — ${r.reason}`,
+          where: "local",
+          status: r.attached ? "ok" : "failed",
+        });
+      }
+    }
 
     let runId: string | null = null;
     let reply = "";

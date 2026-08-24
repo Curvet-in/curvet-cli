@@ -5,6 +5,7 @@ import type { AgentSession, SessionState, Approval, Entry } from "../session.js"
 import type { DiffLine } from "../diff.js";
 import { CURVET_MARK, MARK_WIDTH } from "./mark.js";
 import { COMMANDS, completions, helpText, isCommand, parseCommand } from "../commands.js";
+import { activeMention, applyCompletion, listProjectFiles, matchFiles } from "../mentions.js";
 
 /**
  * The full-screen session.
@@ -260,6 +261,24 @@ export default function App({ session, cwd, toolsEnabled, model, git, onCommand,
   const answering = state.pending?.kind === "ask_user";
   const matches = answering ? [] : completions(input);
 
+  // The project's files, for the `@` picker. Walked once when the session opens
+  // rather than on each keystroke: the list is only used to filter, and a
+  // monorepo is not worth re-walking between two characters.
+  const [files, setFiles] = React.useState<string[]>([]);
+  React.useEffect(() => {
+    if (!toolsEnabled) return;
+    let alive = true;
+    void listProjectFiles(cwd).then((f) => {
+      if (alive) setFiles(f);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [cwd, toolsEnabled]);
+
+  const mentionQuery = answering || !toolsEnabled ? null : activeMention(input);
+  const fileMatches = mentionQuery === null ? [] : matchFiles(files, mentionQuery);
+
   const submit = (text: string) => {
     const trimmed = text.trim();
     setInput("");
@@ -310,6 +329,13 @@ export default function App({ session, cwd, toolsEnabled, model, git, onCommand,
     }
     if (key.backspace || key.delete) {
       setInput((v) => v.slice(0, -1));
+      return;
+    }
+    // Tab takes the best match for the `@` being typed. Only when there IS one —
+    // otherwise tab is a tab, and silently doing nothing is better than
+    // inserting whitespace into a path.
+    if (key.tab && fileMatches.length > 0) {
+      setInput((v) => applyCompletion(v, fileMatches[0]));
       return;
     }
     if (!char || key.ctrl || key.meta) {
@@ -363,6 +389,19 @@ export default function App({ session, cwd, toolsEnabled, model, git, onCommand,
   const branch = git?.branch ? `  ⎇ ${git.branch}${dirty}` : "";
   const spent = state.costUsd > 0 ? ` · $${state.costUsd.toFixed(4)}` : "";
   const busy = state.status === "thinking" || state.status === "aborting";
+
+  const filePicker =
+    !state.pending && fileMatches.length > 0 ? (
+      <Box flexDirection="column">
+        {fileMatches.slice(0, 6).map((f, i) => (
+          <Text key={f}>
+            <Text color={i === 0 ? "cyan" : "gray"}>{i === 0 ? "› " : "  "}</Text>
+            <Text color={i === 0 ? "cyan" : "gray"}>{f}</Text>
+            {i === 0 ? <Text color="gray">{"  tab"}</Text> : null}
+          </Text>
+        ))}
+      </Box>
+    ) : null;
 
   const picker =
     !state.pending && matches.length > 0 ? (
@@ -426,6 +465,7 @@ export default function App({ session, cwd, toolsEnabled, model, git, onCommand,
         <Box marginTop={1} flexDirection="column" width={Math.min(cols - 4, 72)}>
           {state.error ? <Text color="red">{state.error}</Text> : null}
           {picker}
+          {filePicker}
           {/* A border, only here. Centred text above a full-width left-aligned
               prompt reads as a stray line; the box is what makes the cluster one
               thing. In conversation the transcript gives the prompt its context
@@ -454,6 +494,7 @@ export default function App({ session, cwd, toolsEnabled, model, git, onCommand,
       <Box flexDirection="column" flexShrink={0} paddingX={1}>
         {state.error ? <Text color="red">{state.error}</Text> : null}
         {picker}
+        {filePicker}
         {prompt}
         {status}
       </Box>
