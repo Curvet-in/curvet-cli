@@ -63,6 +63,35 @@ export interface ToolContext {
    * can be undone. `null` means the file did not exist and undo should delete it.
    */
   backup?: (absPath: string, original: string | null, written: string) => Promise<void>;
+  /**
+   * Ask whether to run a command. Absent means commands are impossible, not
+   * automatic — the same rule `confirmWrite` follows, for the same reason: a
+   * caller that has not supplied a way to ask has not earned the right to skip
+   * asking.
+   */
+  confirmCommand?: (ask: CommandApproval) => Promise<boolean>;
+  /**
+   * Environment variable names a command may see beyond the keep-list. The
+   * per-project opt-in for build tools that genuinely need one.
+   */
+  commandEnv?: string[];
+  /** Aborts a running command when the run is aborted. */
+  signal?: AbortSignal;
+}
+
+/** What the user is being asked about a command. */
+export interface CommandApproval {
+  /** The command as the model wrote it, for the user to read. */
+  display: string;
+  /** How it was classified — decides how loud the prompt is. */
+  tier: "confirm" | "unknown" | "loud";
+  /** What this command can do that the others cannot. Only for `loud`. */
+  warning?: string;
+  /** Paths outside the project this command was handed. */
+  outsidePaths: string[];
+  /** The model's one line on what it expects to learn. */
+  why?: string;
+  cwd: string;
 }
 
 /** Trim a result to the cap, saying so, so the model narrows instead of retrying. */
@@ -597,10 +626,10 @@ async function isReadable(ctx: ToolContext, abs: string): Promise<boolean> {
 
 // ---- dispatch ---------------------------------------------------------------
 
-export type ToolName = "read_file" | "list_dir" | "grep" | "write_file" | "edit_file";
+export type ToolName = "read_file" | "list_dir" | "grep" | "write_file" | "edit_file" | "run_command";
 
 /** Everything this client can execute. Declared to the server verbatim. */
-export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file", "edit_file"];
+export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file", "edit_file", "run_command"];
 
 /**
  * The tools that change files.
@@ -615,13 +644,35 @@ export function isWriteTool(name: string): boolean {
   return name === "write_file" || name === "edit_file";
 }
 
+/**
+ * Tools whose outcome the audit log must not record as "auto".
+ *
+ * Broader than `isWriteTool`: a command that ran because the user said yes was
+ * confirmed, even though it wrote no file. The audit answers "was this approved
+ * by a person", and a command is exactly the case where that question matters
+ * most.
+ */
+export function isEffectTool(name: string): boolean {
+  return isWriteTool(name) || name === "run_command";
+}
+
 const EXECUTORS: Record<ToolName, (ctx: ToolContext, input: Record<string, unknown>) => Promise<ToolOutcome>> = {
   read_file: readFile,
   list_dir: listDir,
   grep,
   write_file: writeFile,
   edit_file: editFile,
+  run_command: runCommandTool,
 };
+
+/**
+ * Lazily loaded so `tools.ts` and `run.ts` can refer to each other's types
+ * without a require cycle at module load.
+ */
+async function runCommandTool(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolOutcome> {
+  const { runCommand } = await import("./run.js");
+  return runCommand(ctx, input);
+}
 
 /**
  * Execute one tool call. Never throws: an unexpected failure is a result the
