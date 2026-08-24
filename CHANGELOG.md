@@ -2,7 +2,7 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
-## Unreleased
+## 0.11.0
 
 - **`@` file mentions.** Typing `@src/server.ts` in a message attaches that
   file, so the model reads it instead of spending two or three turns hunting for
