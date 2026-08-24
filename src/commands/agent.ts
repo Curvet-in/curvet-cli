@@ -10,7 +10,7 @@ import {
   type ClientToolCall,
   type Curvet,
 } from "@curvet/sdk";
-import { SUPPORTED_TOOLS, execute, type ToolContext } from "../agent/tools.js";
+import { SUPPORTED_TOOLS, execute, isWriteTool, type ToolContext } from "../agent/tools.js";
 import { classifyPath, needsBlanketConfirm, findProjectRoot, refusalReason } from "../agent/permissions.js";
 import type { FileDiff } from "../agent/diff.js";
 import { saveBackup, undoRun, lastRunWithWrites } from "../agent/backup.js";
@@ -484,7 +484,7 @@ async function runLocalTool(
   // refuses outright when there is no way to ask. Recording one as "auto" would
   // understate it in the one direction that matters when someone later asks
   // whether a change was approved.
-  else if (outcome.ok && call.name === "write_file") decision = "confirmed";
+  else if (outcome.ok && isWriteTool(call.name)) decision = "confirmed";
 
   // The user should see a refusal happen, in their own terminal, in their own
   // words — not infer it from the model's paraphrase a few seconds later.
@@ -557,7 +557,7 @@ async function runSlashCommand(o: {
     if (!access.enabled) return `no file access — ${access.why}`;
     return [
       `reading and editing ${access.root}`,
-      "  read_file, list_dir, grep, write_file — every write shown as a diff first",
+      "  read_file, list_dir, grep, write_file, edit_file — every change shown as a diff first",
       "  secrets are refused before opening; writes outside the project are refused",
     ].join("\n");
   }

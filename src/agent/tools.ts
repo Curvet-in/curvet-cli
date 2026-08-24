@@ -6,9 +6,10 @@ import { diffLines, type FileDiff } from "./diff.js";
 /**
  * The tools that run on this machine.
  *
- * Read-only, all three of them. Nothing here writes, deletes or executes, and
- * the client declares only what is in this file — so a run cannot ask for a
- * capability that has not shipped.
+ * Five of them: three that read, and two that change files — `write_file` for
+ * whole contents, `edit_file` for an exact replacement inside one. Nothing here
+ * deletes or executes, and the client declares only what is in this file, so a
+ * run cannot ask for a capability that has not shipped.
  *
  * ── On limits ───────────────────────────────────────────────────────────────
  *
@@ -299,6 +300,171 @@ export async function writeFile(ctx: ToolContext, input: Record<string, unknown>
   };
 }
 
+// ---- edit_file --------------------------------------------------------------
+
+/**
+ * How many characters of a failed `old_string` to quote back at the model.
+ * Enough to see which attempt it was; not so much that a miss costs a page.
+ */
+const EDIT_ECHO_CHARS = 200;
+
+/** Every index at which `needle` occurs in `haystack`. Plain, non-overlapping. */
+function occurrences(haystack: string, needle: string): number[] {
+  const out: number[] = [];
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) return out;
+    out.push(at);
+    from = at + needle.length;
+  }
+}
+
+/** Collapse CRLF and trailing spaces, for explaining a near-miss. */
+function loosen(s: string): string {
+  return s.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "");
+}
+
+/**
+ * Replace an exact piece of a file with another.
+ *
+ * ── Why this exists alongside write_file ────────────────────────────────────
+ *
+ * `write_file` takes the COMPLETE new contents, so changing one line of a
+ * 950-line file costs the model ten thousand output tokens to reproduce the
+ * other 949 — and hands the user a diff whose real change is buried in it.
+ * Both halves of that are bad: the tokens are the smaller problem, and a
+ * 900-line diff nobody can read is an approval that has stopped meaning
+ * anything.
+ *
+ * Re-emitting a whole file is also where models drop things. The failure is
+ * quiet, it lands in code that was never being edited, and the diff that would
+ * have shown it is too big to read.
+ *
+ * ── Why the match is exact, and why a miss is a refusal ─────────────────────
+ *
+ * No fuzzy matching, no nearest-neighbour, no "did you mean". An edit tool that
+ * guesses where the model meant lands in the wrong place while showing a diff
+ * that looks entirely plausible, and the user approves it. Every uncertainty
+ * here is a refusal that tells the model how to be certain instead:
+ *
+ *   not found      read the file and copy the text exactly
+ *   found N times  include more surrounding lines, or say replace_all
+ *
+ * A near-miss is DIAGNOSED but still refused — when the only difference is line
+ * endings or trailing whitespace, saying so turns an unactionable failure into
+ * a one-line fix, without this quietly rewriting bytes the user did not approve.
+ */
+export async function editFile(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolOutcome> {
+  const request = String(input.path ?? "");
+  if (!request) return { ok: false, error: "No path was given." };
+  if (typeof input.old_string !== "string" || typeof input.new_string !== "string") {
+    return { ok: false, error: "edit_file needs `old_string` and `new_string`, both strings." };
+  }
+  if (!ctx.confirmWrite) {
+    return { ok: false, error: "This client cannot write files." };
+  }
+
+  const oldStr = input.old_string;
+  const newStr = input.new_string;
+  const replaceAll = input.replace_all === true;
+
+  if (oldStr === "") {
+    return {
+      ok: false,
+      error: "`old_string` is empty. To create a file, use write_file; edit_file only changes text that is already there.",
+    };
+  }
+  if (oldStr === newStr) {
+    return { ok: false, error: "`old_string` and `new_string` are identical, so there is nothing to change." };
+  }
+
+  const verdict = await classifyPath(ctx.cwd, request);
+  if (verdict.decision === "deny") {
+    return { ok: false, error: denialMessage(request, verdict.matched) };
+  }
+  if (verdict.decision === "confirm") {
+    // Same rule as write_file: reads outside the project are confirmed, writes
+    // are refused. An edit is a write.
+    return {
+      ok: false,
+      error:
+        `Refused: "${request.slice(0, 120)}" is outside this project, and this client only writes inside it. ` +
+        "Edit a file within the project, or ask the user to make the change themselves.",
+    };
+  }
+
+  let original: string;
+  try {
+    const stat = await fs.stat(verdict.abs);
+    if (stat.isDirectory()) return { ok: false, error: `"${request}" is a directory.` };
+    original = await fs.readFile(verdict.abs, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        ok: false,
+        error: `"${request}" does not exist. Use write_file to create it; edit_file only changes a file that is already there.`,
+      };
+    }
+    return { ok: false, error: `Could not open "${request}": ${(err as Error).message}` };
+  }
+
+  const hits = occurrences(original, oldStr);
+
+  if (hits.length === 0) {
+    const echo = oldStr.slice(0, EDIT_ECHO_CHARS) + (oldStr.length > EDIT_ECHO_CHARS ? " …" : "");
+    // A near-miss is worth naming. "Not found" sends the model round the loop
+    // again with the same text; "your line endings differ" gets it right next try.
+    const near = occurrences(loosen(original), loosen(oldStr)).length;
+    const why = near
+      ? " The text IS present apart from line endings or trailing whitespace — read the file again and copy it byte for byte, including how the lines end."
+      : "";
+    return {
+      ok: false,
+      error:
+        `Refused: that exact text is not in "${request.slice(0, 120)}".${why}\n` +
+        `Looked for:\n${echo}\n` +
+        "Read the file and copy the text exactly as it appears. Do not guess at a variation.",
+    };
+  }
+
+  if (hits.length > 1 && !replaceAll) {
+    return {
+      ok: false,
+      error:
+        `Refused: that text appears ${hits.length} times in "${request.slice(0, 120)}", so which one to change is ambiguous. ` +
+        "Include more of the surrounding lines to pick out the one you mean, or pass replace_all: true to change every one.",
+    };
+  }
+
+  const next = replaceAll
+    ? original.split(oldStr).join(newStr)
+    : original.slice(0, hits[0]) + newStr + original.slice(hits[0] + oldStr.length);
+
+  const diff = diffLines(original, next);
+  const approved = await ctx.confirmWrite(request, diff, false);
+  if (!approved) {
+    return {
+      ok: false,
+      error: `The user declined this change to "${request.slice(0, 120)}". Do not try again with a variation — ask them what they want instead.`,
+    };
+  }
+
+  try {
+    if (ctx.backup) await ctx.backup(verdict.abs, original, next);
+    await fs.writeFile(verdict.abs, next, "utf8");
+  } catch (err) {
+    return { ok: false, error: `Could not write "${request}": ${(err as Error).message}` };
+  }
+
+  const where = hits.length > 1 ? ` in ${hits.length} places` : "";
+  return {
+    ok: true,
+    content: `Edited ${request}${where} (+${diff.added} −${diff.removed}). The user approved this change.`,
+    truncated: false,
+  };
+}
+
 // ---- grep -------------------------------------------------------------------
 
 /**
@@ -431,16 +597,30 @@ async function isReadable(ctx: ToolContext, abs: string): Promise<boolean> {
 
 // ---- dispatch ---------------------------------------------------------------
 
-export type ToolName = "read_file" | "list_dir" | "grep" | "write_file";
+export type ToolName = "read_file" | "list_dir" | "grep" | "write_file" | "edit_file";
 
 /** Everything this client can execute. Declared to the server verbatim. */
-export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file"];
+export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file", "edit_file"];
+
+/**
+ * The tools that change files.
+ *
+ * A predicate rather than a name check at each call site, because there were
+ * three of those — the `--confirm-reads` gate, and the audit `decision` in both
+ * renderers — and each read `name === "write_file"` while meaning "a tool that
+ * writes". Adding edit_file to a list of one in three separate files is how a
+ * write tool ends up recorded as an automatic read.
+ */
+export function isWriteTool(name: string): boolean {
+  return name === "write_file" || name === "edit_file";
+}
 
 const EXECUTORS: Record<ToolName, (ctx: ToolContext, input: Record<string, unknown>) => Promise<ToolOutcome>> = {
   read_file: readFile,
   list_dir: listDir,
   grep,
   write_file: writeFile,
+  edit_file: editFile,
 };
 
 /**
