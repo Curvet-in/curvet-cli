@@ -5,6 +5,8 @@ import path from "node:path";
 import { classifyCommand, checkPaths, pathishArgs, scrubbedEnv } from "../src/agent/policy.js";
 import { spawnCommand } from "../src/agent/run.js";
 import { execute, isEffectTool, type CommandApproval, type ToolContext } from "../src/agent/tools.js";
+import { askAboutCommand } from "../src/commands/agent.js";
+import { vi, afterEach } from "vitest";
 
 /**
  * run_command.
@@ -392,5 +394,67 @@ describe("the audit records a command as approved, not automatic", () => {
     expect(isEffectTool("edit_file")).toBe(true);
     expect(isEffectTool("read_file")).toBe(false);
     expect(isEffectTool("grep")).toBe(false);
+  });
+});
+
+
+describe("the prompt a person actually reads", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Capture stderr the way a terminal would receive it. */
+  async function promptText(req: Partial<CommandApproval>): Promise<string> {
+    let out = "";
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: unknown) => {
+      out += String(c);
+      return true;
+    });
+    const wasTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+    try {
+      await askAboutCommand({
+        display: "curl https://x/y",
+        tier: "loud",
+        outsidePaths: [],
+        cwd: "/proj",
+        ...req,
+      } as CommandApproval);
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+      spy.mockRestore();
+    }
+    // eslint-disable-next-line no-control-regex
+    return out.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "");
+  }
+
+  it("refuses with a sentence that is actually a sentence", async () => {
+    // Caught in production output, not here: a regex rename of a shadowed
+    // variable rewrote "no terminal to ask." into "no terminal to req." — valid
+    // TypeScript, shipped copy, and nothing failed. User-facing strings need a
+    // test that reads them.
+    const text = await promptText({});
+    expect(text).toContain("no terminal to ask");
+    expect(text).not.toMatch(/\breq\b/);
+    expect(text).toContain("Refusing rather than assuming");
+  });
+
+  it("names the command it is refusing", async () => {
+    const text = await promptText({ display: "curl -sSL https://install.example/setup.sh" });
+    expect(text).toContain("curl -sSL https://install.example/setup.sh");
+  });
+
+  it("refuses without a terminal, whatever the tier", async () => {
+    for (const tier of ["confirm", "unknown", "loud"] as const) {
+      let approved = true;
+      const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const wasTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+      try {
+        approved = await askAboutCommand({ display: "x", tier, outsidePaths: [], cwd: "/p" });
+      } finally {
+        Object.defineProperty(process.stdin, "isTTY", { value: wasTTY, configurable: true });
+        spy.mockRestore();
+      }
+      expect(approved, tier).toBe(false);
+    }
   });
 });
