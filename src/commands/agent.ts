@@ -731,19 +731,26 @@ async function streamRun(
   // the thing to say first, and an attachment only makes sense underneath it.
   // Outside a project there is no boundary to measure a path against, so
   // mentions stay as written and read to the model as plain references.
+  // Upload size is worth showing: a photo is the one mention that takes long enough
+  // for the user to wonder whether anything is happening.
+  const mb = (n: number) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`);
+
   let sent = task;
+  let attachments: { id: string; name: string }[] = [];
   if (access.enabled) {
     const { resolveMentions } = await import("../agent/mentions.js");
-    const { task: expanded, resolved } = await resolveMentions(task, {
+    const { task: expanded, resolved, attachments: parked } = await resolveMentions(task, {
       cwd: access.root,
       confirm: askOnTerminal,
+      upload: async ({ name, bytes }) => client.agency.attach({ data: bytes, name, sessionId: opts.session }),
     });
     sent = expanded;
+    attachments = parked;
     if (!opts.json && !opts.quiet) {
       for (const r of resolved) {
         process.stderr.write(
           r.attached
-            ? ui.chrome(`  ⌂ attached ${r.path}${r.truncated ? " (truncated)" : ""}\n`)
+            ? ui.chrome(`  ⌂ ${r.upload ? `uploaded ${r.path} (${mb(r.upload.bytes)})` : `attached ${r.path}${r.truncated ? " (truncated)" : ""}`}\n`)
             : warn(`  ⌂ ${r.path} — ${r.reason}\n`),
         );
       }
@@ -769,6 +776,7 @@ async function streamRun(
       task: sent,
       modelId: opts.model,
       sessionId: opts.session,
+      attachments: attachments.length ? attachments : undefined,
       // Declaring a tool is a promise to execute it, so only when this client
       // will actually answer — see resolveToolAccess.
       clientTools: access.enabled ? SUPPORTED_TOOLS : undefined,

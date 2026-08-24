@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -176,11 +176,114 @@ describe("resolveMentions refuses what read_file would refuse", () => {
     expect(resolved[0].reason).toMatch(/directory/);
   });
 
-  it("refuses a binary file rather than carrying a screenful of noise", async () => {
-    await fs.writeFile(path.join(root, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]));
-    const { resolved } = await resolveMentions("@logo.png", { cwd: root });
+  it("refuses a binary file it cannot upload rather than carrying a screenful of noise", async () => {
+    // A .bin is not a type the server can read AS a file, so pasting it in as text
+    // is the only option and it is a bad one — replacement characters that teach the
+    // model nothing and cost a fortune to carry on every turn.
+    await fs.writeFile(path.join(root, "blob.bin"), Buffer.from([0x00, 0x01, 0x02, 0x03]));
+    const { resolved } = await resolveMentions("@blob.bin", { cwd: root, upload: async () => ({ id: "x", name: "x" }) });
     expect(resolved[0].attached).toBe(false);
     expect(resolved[0].reason).toMatch(/binary/);
+  });
+});
+
+describe("uploading a mentioned file", () => {
+  // `@photo.jpg` used to be refused outright. Pasting a photo in as text is not a
+  // degraded version of attaching it, it is impossible — which is why this goes up
+  // as bytes and comes back as an id the run can name.
+  let root: string;
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "mention-upload-"));
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+  });
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  function uploader() {
+    const calls: { name: string; bytes: Buffer }[] = [];
+    const fn = async (f: { name: string; bytes: Buffer }) => {
+      calls.push(f);
+      return { id: `f_${calls.length}`, name: f.name };
+    };
+    return { fn, calls };
+  }
+
+  it("uploads an image and hands back an id for the run", async () => {
+    await fs.writeFile(path.join(root, "photo.png"), png);
+    const up = uploader();
+    const { resolved, attachments, task } = await resolveMentions("edit @photo.png please", { cwd: root, upload: up.fn });
+
+    expect(resolved[0].attached).toBe(true);
+    expect(up.calls[0].name).toBe("photo.png");
+    expect(up.calls[0].bytes.equals(png)).toBe(true);
+    expect(attachments).toEqual([{ id: "f_1", name: "photo.png" }]);
+
+    // The bytes are NOT pasted into the message — they reach the model as content
+    // blocks. What the text carries is the NAME, because that is the handle the
+    // media tools take as `source`.
+    expect(task).not.toContain(png.toString("base64"));
+    expect(task).toContain("photo.png");
+    expect(task).toMatch(/source.*generate_image|generate_image/);
+  });
+
+  it("does not upload a text file it can simply read", async () => {
+    await fs.writeFile(path.join(root, "notes.md"), "# hello");
+    const up = uploader();
+    const { attachments, task } = await resolveMentions("@notes.md", { cwd: root, upload: up.fn });
+    expect(up.calls).toHaveLength(0);
+    expect(attachments).toEqual([]);
+    expect(task).toContain("# hello");
+  });
+
+  it("refuses to upload with no uploader, rather than pretending", async () => {
+    await fs.writeFile(path.join(root, "photo.png"), png);
+    const { resolved, attachments } = await resolveMentions("@photo.png", { cwd: root });
+    expect(resolved[0].attached).toBe(false);
+    expect(resolved[0].reason).toMatch(/cannot upload/);
+    expect(attachments).toEqual([]);
+  });
+
+  it("stops at five uploads and says which ones did not go", async () => {
+    // Agency keeps five attachments per run and drops the rest WITHOUT saying so.
+    // The sixth photo has to fail loudly here or it quietly never existed.
+    for (let i = 1; i <= 6; i++) await fs.writeFile(path.join(root, `p${i}.png`), png);
+    const up = uploader();
+    const { resolved, attachments } = await resolveMentions(
+      "@p1.png @p2.png @p3.png @p4.png @p5.png @p6.png",
+      { cwd: root, upload: up.fn },
+    );
+    expect(attachments).toHaveLength(5);
+    expect(up.calls).toHaveLength(5);
+    const sixth = resolved.find((r) => r.path === "p6.png");
+    expect(sixth?.attached).toBe(false);
+    expect(sixth?.reason).toMatch(/5 files/);
+  });
+
+  it("a secret is still refused, whatever its extension", async () => {
+    // The upload branch must sit BEHIND classifyPath, not beside it. A .png named
+    // like a key is contrived; `@credentials.json`-style mistakes are not.
+    await fs.mkdir(path.join(root, ".ssh"), { recursive: true });
+    await fs.writeFile(path.join(root, ".ssh", "id_rsa.png"), png);
+    const up = uploader();
+    const { resolved, attachments } = await resolveMentions("@.ssh/id_rsa.png", { cwd: root, upload: up.fn });
+    expect(resolved[0].attached).toBe(false);
+    expect(up.calls).toHaveLength(0);
+    expect(attachments).toEqual([]);
+  });
+
+  it("an upload that fails says why, and does not become an attachment", async () => {
+    await fs.writeFile(path.join(root, "photo.png"), png);
+    const { resolved, attachments } = await resolveMentions("@photo.png", {
+      cwd: root,
+      upload: async () => { throw new Error("not enough credits"); },
+    });
+    expect(resolved[0].attached).toBe(false);
+    expect(resolved[0].reason).toMatch(/not enough credits/);
+    expect(attachments).toEqual([]);
   });
 });
 
