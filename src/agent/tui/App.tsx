@@ -171,6 +171,14 @@ function ApprovalPrompt({ pending, width }: { pending: Approval; width: number }
           <Text color="gray">{`    in  ${pending.cwd}`}</Text>
           {pending.why ? <Text color="gray">{`    why: ${pending.why}`}</Text> : null}
         </Box>
+        {pending.scriptBody ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text color="gray">{"    which runs:"}</Text>
+            {pending.scriptBody.split("\n").slice(0, 8).map((l, i) => (
+              <Text key={i} color="yellow">{`      ${l}`}</Text>
+            ))}
+          </Box>
+        ) : null}
         {pending.warning ? (
           <Box marginTop={1} flexDirection="column">
             {wrap(pending.warning, width - 4).map((l, i) => (

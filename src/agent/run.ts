@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { classifyCommand, checkPaths, pathishArgs, scrubbedEnv, type Tier } from "./policy.js";
+import { classifyCommand, checkPaths, pathishArgs, scriptBody, scrubbedEnv, type Tier } from "./policy.js";
 import { MAX_RESULT_CHARS } from "./tools.js";
 import type { ToolContext, ToolOutcome } from "./tools.js";
 
@@ -186,6 +186,7 @@ export async function runCommand(ctx: ToolContext, input: Record<string, unknown
     const askTier = verdict.tier === "auto" ? "confirm" : verdict.tier;
     const approved = await ctx.confirmCommand({
       display,
+      scriptBody: (await scriptBody(ctx.cwd, command, rawArgs)) ?? undefined,
       tier: askTier,
       warning: verdict.warning,
       outsidePaths: paths.needsConfirm,
