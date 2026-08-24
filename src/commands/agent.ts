@@ -474,6 +474,14 @@ export async function askAboutCommand(req: CommandApproval): Promise<boolean> {
   process.stderr.write(`\n    ${req.display}\n`);
   process.stderr.write(ui.chrome(`    in  ${req.cwd}\n`));
   if (req.why) process.stderr.write(ui.chrome(`    why: ${req.why}\n`));
+  if (req.scriptBody) {
+    // The part that is actually being approved. Never elided: the interesting
+    // half of a hostile script is exactly what a truncation would remove.
+    process.stderr.write(ui.chrome("\n    which runs:\n"));
+    for (const line of req.scriptBody.split("\n")) {
+      process.stderr.write(ui.alarm(`      ${line}\n`));
+    }
+  }
   if (req.warning) process.stderr.write(`\n${ui.error(`  ${req.warning}`)}\n`);
   if (req.outsidePaths.length) {
     process.stderr.write(`\n${ui.error("  It was given paths outside this project:")}\n`);

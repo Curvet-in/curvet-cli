@@ -38,6 +38,11 @@ All notable changes to `@curvet/cli` are documented here.
   that never receives a token cannot send one anywhere. A project can opt one
   back in by name.
 
+  **The approval shows what a script actually runs.** `npm run setup` says
+  nothing about whether it is a build step or `curl … | sh`, so the prompt reads
+  the body out of `package.json` (or the recipe out of a `Makefile`) and shows
+  it. That turns "approve `npm run setup`?" into a question you can answer.
+
   Commands are killed as a process group on timeout or abort, output is capped at
   48,000 characters with truncation declared, stdin is `/dev/null`, and a
   non-zero exit is reported as a result rather than a failure — `npm test` failing

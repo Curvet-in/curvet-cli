@@ -75,6 +75,7 @@ export type Approval =
       warning?: string;
       outsidePaths: string[];
       why?: string;
+      scriptBody?: string;
       cwd: string;
     };
 
@@ -222,6 +223,7 @@ export class AgentSession {
           warning: ask.warning,
           outsidePaths: ask.outsidePaths,
           why: ask.why,
+          scriptBody: ask.scriptBody,
           cwd: ask.cwd,
         });
         return approved;

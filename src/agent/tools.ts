@@ -91,6 +91,12 @@ export interface CommandApproval {
   outsidePaths: string[];
   /** The model's one line on what it expects to learn. */
   why?: string;
+  /**
+   * What the command will actually run, when that is defined elsewhere — a
+   * package.json script, a Makefile recipe. `npm run setup` says nothing about
+   * whether it is a build step or `curl … | sh`; this is the part worth reading.
+   */
+  scriptBody?: string;
   cwd: string;
 }
 
