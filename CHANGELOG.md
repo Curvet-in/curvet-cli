@@ -2,6 +2,47 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## Unreleased
+
+- **`run_command` — run tests, builds, git and linters on your machine.** The
+  design is `documentation/CLI_RUN_COMMAND_PLAN.md` in darkapp-haven; the short
+  version is two gates and no shell.
+
+  **No shell.** The tool takes a program and its arguments separately and spawns
+  with `shell: false`, so `;`, `|`, `&&`, `$()`, backticks, globs and `>` are
+  ordinary characters rather than operators. Every prefix-matching allowlist that
+  has ever been bypassed was bypassed through those, and this deletes the class
+  instead of filtering it.
+
+  **Two gates, both must pass.** A tier decides whether a program may run and
+  whether it needs approval. `classifyPath` — the same function `read_file` uses
+  — decides whether it may touch a file. So `cat src/a.ts` runs with no prompt
+  and `cat .env` is refused, because what is dangerous there is the path, not the
+  command.
+
+  **The everyday case is silent.** Reading and inspecting — `git
+  status/diff/log`, `ls`, `cat`, `grep`, `find`, `wc`, `--version` — runs without
+  asking. Anything with an effect asks. An unrecognised command asks rather than
+  being refused. The loud prompt is reserved for things that are different in
+  kind, and it says what makes them different: what `curl` can do with a file
+  this run has read, that `rm` has no undo, that `sudo` steps outside every check
+  here.
+
+  **`git` is hardened on every call** — pager, editor, hooks and ssh command
+  nailed shut, global and system config ignored — because a repository you just
+  cloned can commit a `.git/config` whose pager runs on `git log`. `-c` and
+  `--exec-path` from the model are refused.
+
+  **The environment is rebuilt, not inherited.** A keep-list of about nine
+  variables, everything else dropped, credentials dropped twice over. A command
+  that never receives a token cannot send one anywhere. A project can opt one
+  back in by name.
+
+  Commands are killed as a process group on timeout or abort, output is capped at
+  48,000 characters with truncation declared, stdin is `/dev/null`, and a
+  non-zero exit is reported as a result rather than a failure — `npm test` failing
+  is what the model asked to find out.
+
 ## 0.11.0
 
 - **`@` file mentions.** Typing `@src/server.ts` in a message attaches that

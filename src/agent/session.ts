@@ -1,5 +1,5 @@
 import { clientToolCallFromEvent, pauseFromEvent, type AgencyEvent, type Curvet } from "@curvet/sdk";
-import { execute, isWriteTool, SUPPORTED_TOOLS, type ToolContext } from "./tools.js";
+import { execute, isEffectTool, isWriteTool, SUPPORTED_TOOLS, type ToolContext } from "./tools.js";
 import { classifyPath, needsBlanketConfirm } from "./permissions.js";
 import { record as auditRecord } from "./audit.js";
 import { saveBackup } from "./backup.js";
@@ -60,7 +60,23 @@ export type Approval =
   | { kind: "read"; id: string; title: string; detail: string }
   | { kind: "ask_user"; id: string; prompt: string; options?: string[] }
   | { kind: "plan"; id: string; prompt: string; steps?: { agent: string; task: string }[] }
-  | { kind: "confirm"; id: string; prompt: string; warning?: string };
+  | { kind: "confirm"; id: string; prompt: string; warning?: string }
+  /**
+   * A command. Its own kind rather than a `confirm` with a longer prompt,
+   * because the renderer has to show the argv verbatim, the reason it is loud,
+   * and any path it was handed outside the project — and a prompt that has to
+   * squeeze all of that into one string is a prompt nobody reads.
+   */
+  | {
+      kind: "command";
+      id: string;
+      display: string;
+      tier: "confirm" | "unknown" | "loud";
+      warning?: string;
+      outsidePaths: string[];
+      why?: string;
+      cwd: string;
+    };
 
 export interface SessionState {
   entries: Entry[];
@@ -196,6 +212,20 @@ export class AgentSession {
   private toolContext(runId: string): ToolContext {
     return {
       cwd: this.opts.cwd,
+      signal: this.controller?.signal,
+      confirmCommand: async (ask) => {
+        const { approved } = await this.park({
+          kind: "command",
+          id: `cmd_${Date.now()}`,
+          display: ask.display,
+          tier: ask.tier,
+          warning: ask.warning,
+          outsidePaths: ask.outsidePaths,
+          why: ask.why,
+          cwd: ask.cwd,
+        });
+        return approved;
+      },
       confirm: async (question, detail) => {
         const { approved } = await this.park({
           kind: "read",
@@ -441,7 +471,7 @@ export class AgentSession {
     const outcome = await execute(ctx, name, input);
     if (!outcome.ok && /^Refused:/.test(outcome.error ?? "")) decision = "denied";
     else if (!outcome.ok && /declined/.test(outcome.error ?? "")) decision = "declined";
-    else if (outcome.ok && isWriteTool(name)) decision = "confirmed";
+    else if (outcome.ok && isEffectTool(name)) decision = "confirmed";
 
     await this.finishLocal(runId, callId, name, title, decision, outcome);
   }

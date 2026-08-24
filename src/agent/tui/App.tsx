@@ -158,6 +158,42 @@ function ApprovalPrompt({ pending, width }: { pending: Approval; width: number }
       </Box>
     );
   }
+  if (pending.kind === "command") {
+    return (
+      <Box flexDirection="column">
+        <Text color={pending.tier === "loud" ? "red" : "yellow"}>
+          {pending.tier === "loud" ? "! Run a command?" : "! Run a command?"}
+        </Text>
+        <Box marginTop={1} flexDirection="column">
+          {wrap(pending.display, width - 6).map((l, i) => (
+            <Text key={i} color="white">{`    ${l}`}</Text>
+          ))}
+          <Text color="gray">{`    in  ${pending.cwd}`}</Text>
+          {pending.why ? <Text color="gray">{`    why: ${pending.why}`}</Text> : null}
+        </Box>
+        {pending.warning ? (
+          <Box marginTop={1} flexDirection="column">
+            {wrap(pending.warning, width - 4).map((l, i) => (
+              <Text key={i} color="red">{`  ${l}`}</Text>
+            ))}
+          </Box>
+        ) : null}
+        {pending.outsidePaths.length ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text color="red">  It was given paths outside this project:</Text>
+            {pending.outsidePaths.slice(0, 4).map((p) => (
+              <Text key={p} color="red">{`    ${p}`}</Text>
+            ))}
+          </Box>
+        ) : null}
+        {pending.tier === "unknown" ? (
+          <Text color="gray">{"\n  This is not a command curvet has a rule for."}</Text>
+        ) : null}
+        <Text color="gray">{"\n  run? [y/N]"}</Text>
+      </Box>
+    );
+  }
+
   if (pending.kind === "ask_user") {
     return (
       <Box flexDirection="column">

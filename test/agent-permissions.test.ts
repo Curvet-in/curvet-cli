@@ -566,11 +566,22 @@ describe("the executors enforce it", () => {
   });
 
   it("refuses a tool it does not implement rather than pretending", async () => {
-    for (const name of ["run_command", "delete_file", "apply_patch"]) {
+    // `run_command` used to be on this list and now exists — see
+    // src/agent/run.ts. `delete_file` is not coming: there is no undo for it,
+    // and the whole write story rests on there being one.
+    for (const name of ["delete_file", "apply_patch", "move_file", "run_script"]) {
       const out = await execute(ctxWith(true), name, { path: "x" });
       expect(out.ok, name).toBe(false);
       expect(out.error, name).toMatch(/cannot run/);
     }
+  });
+
+  it("refuses to run a command when there is no way to ask about it", async () => {
+    // The same rule write_file follows: a context with no way to ask cannot run
+    // one, rather than running it unasked.
+    const out = await execute(ctxWith(true), "run_command", { command: "ls" });
+    expect(out.ok).toBe(false);
+    expect(out.error).toMatch(/cannot run commands/);
   });
 
   it("reports a missing file as a fact, not a crash", async () => {

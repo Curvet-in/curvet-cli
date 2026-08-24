@@ -10,7 +10,7 @@ import {
   type ClientToolCall,
   type Curvet,
 } from "@curvet/sdk";
-import { SUPPORTED_TOOLS, execute, isWriteTool, type ToolContext } from "../agent/tools.js";
+import { SUPPORTED_TOOLS, execute, isEffectTool, type CommandApproval, type ToolContext } from "../agent/tools.js";
 import { classifyPath, needsBlanketConfirm, findProjectRoot, refusalReason } from "../agent/permissions.js";
 import type { FileDiff } from "../agent/diff.js";
 import { saveBackup, undoRun, lastRunWithWrites } from "../agent/backup.js";
@@ -450,6 +450,42 @@ async function askOnTerminal(question: string, detail?: string): Promise<boolean
   return /^y(es)?$/i.test(answer.trim());
 }
 
+/**
+ * Ask about a command.
+ *
+ * The shape of this prompt is the product. It has to make the difference between
+ * `npm test` and `curl … | sh` visible in the second someone spends on it, and
+ * it must never elide the middle of an argv — the interesting part of a hostile
+ * command is exactly what a truncation would remove.
+ */
+async function askAboutCommand(req: CommandApproval): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      warn(
+        `The agent wants to run a command and there is no terminal to req.\n` +
+          `  ${req.display}\n` +
+          "  Refusing rather than assuming.\n",
+      ),
+    );
+    return false;
+  }
+
+  process.stderr.write(`\n${req.tier === "loud" ? ui.alarm("! Run a command?") : ui.ask("! Run a command?")}\n`);
+  process.stderr.write(`\n    ${req.display}\n`);
+  process.stderr.write(ui.chrome(`    in  ${req.cwd}\n`));
+  if (req.why) process.stderr.write(ui.chrome(`    why: ${req.why}\n`));
+  if (req.warning) process.stderr.write(`\n${ui.error(`  ${req.warning}`)}\n`);
+  if (req.outsidePaths.length) {
+    process.stderr.write(`\n${ui.error("  It was given paths outside this project:")}\n`);
+    for (const p of req.outsidePaths.slice(0, 5)) process.stderr.write(ui.error(`    ${p}\n`));
+  }
+  if (req.tier === "unknown") {
+    process.stderr.write(ui.chrome("\n  This is not a command curvet has a rule for.\n"));
+  }
+  const answer = await ask(ui.chrome("\n  run? [y/N] "));
+  return /^y(es)?$/i.test(answer.trim());
+}
+
 async function runLocalTool(
   client: Curvet,
   runId: string,
@@ -465,6 +501,7 @@ async function runLocalTool(
   const ctx: ToolContext = {
     cwd,
     confirmWrite,
+    confirmCommand: (req) => askAboutCommand(req),
     // Throws on failure by design, and the executor lets it propagate: a write
     // whose backup failed is a write that cannot be undone.
     backup: (abs, original, written) => saveBackup(runId, abs, original, written).then(() => undefined),
@@ -503,7 +540,7 @@ async function runLocalTool(
   // refuses outright when there is no way to ask. Recording one as "auto" would
   // understate it in the one direction that matters when someone later asks
   // whether a change was approved.
-  else if (outcome.ok && isWriteTool(call.name)) decision = "confirmed";
+  else if (outcome.ok && isEffectTool(call.name)) decision = "confirmed";
 
   // The user should see a refusal happen, in their own terminal, in their own
   // words — not infer it from the model's paraphrase a few seconds later.
