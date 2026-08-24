@@ -1,5 +1,5 @@
 import { clientToolCallFromEvent, pauseFromEvent, type AgencyEvent, type Curvet } from "@curvet/sdk";
-import { execute, SUPPORTED_TOOLS, type ToolContext } from "./tools.js";
+import { execute, isWriteTool, SUPPORTED_TOOLS, type ToolContext } from "./tools.js";
 import { classifyPath, needsBlanketConfirm } from "./permissions.js";
 import { record as auditRecord } from "./audit.js";
 import { saveBackup } from "./backup.js";
@@ -393,7 +393,7 @@ export class AgentSession {
     const ctx = this.toolContext(runId);
     let decision: "auto" | "confirmed" | "denied" | "declined" = "auto";
 
-    if (this.opts.confirmReads && name !== "write_file") {
+    if (this.opts.confirmReads && !isWriteTool(name)) {
       const verdict = await classifyPath(this.opts.cwd, String(input.path ?? "."));
       if (needsBlanketConfirm(verdict, true)) {
         const { approved } = await this.park({ kind: "read", id: callId, title, detail: this.opts.cwd });
@@ -411,7 +411,7 @@ export class AgentSession {
     const outcome = await execute(ctx, name, input);
     if (!outcome.ok && /^Refused:/.test(outcome.error ?? "")) decision = "denied";
     else if (!outcome.ok && /declined/.test(outcome.error ?? "")) decision = "declined";
-    else if (outcome.ok && name === "write_file") decision = "confirmed";
+    else if (outcome.ok && isWriteTool(name)) decision = "confirmed";
 
     await this.finishLocal(runId, callId, name, title, decision, outcome);
   }
