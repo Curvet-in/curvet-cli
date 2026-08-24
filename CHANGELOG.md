@@ -2,7 +2,7 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
-## Unreleased
+## 0.12.0
 
 - **`run_command` — run tests, builds, git and linters on your machine.** The
   design is `documentation/CLI_RUN_COMMAND_PLAN.md` in darkapp-haven; the short

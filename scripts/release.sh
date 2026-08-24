@@ -44,7 +44,7 @@ npm run build
 echo "==> Smoke testing dist/index.js..."
 node dist/index.js --version >/dev/null
 
-# Bump (optional). npm version commits and creates the vX.Y.Z tag.
+# Bump (optional). The version commit and its tag are both made here.
 if [ -n "${BUMP}" ]; then
   echo "==> Bumping ${BUMP}..."
 
@@ -70,11 +70,24 @@ if [ -n "${BUMP}" ]; then
       !done && /^## Unreleased$/ { print ver; done=1; next }
       { print }
     ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
-    git add CHANGELOG.md
     echo "==> Filed CHANGELOG 'Unreleased' under ${NEXT}"
   fi
 
-  npm version "${BUMP}" -m "release: v%s"
+  # --no-git-tag-version, then commit it all ourselves.
+  #
+  # `npm version` refuses to run on a dirty tree, and a STAGED file is dirty as
+  # far as it is concerned — so rewriting the changelog first and letting npm
+  # commit is not an option, however tidy it looks. That was a real bug: the
+  # script edited CHANGELOG.md, npm version saw the change and aborted, and the
+  # release stopped with the working tree modified.
+  #
+  # Bumping without committing and then making the commit here keeps the whole
+  # release as ONE commit — manifest, lockfile and changelog together — which is
+  # also what you want when reading `git log` later. The tag is applied by the
+  # existing tag-if-untagged step below.
+  npm version "${BUMP}" --no-git-tag-version >/dev/null
+  git add package.json package-lock.json CHANGELOG.md
+  git commit -m "release: v$(node -p "require('./package.json').version")"
 fi
 
 VERSION="v$(node -p "require('./package.json').version")"
