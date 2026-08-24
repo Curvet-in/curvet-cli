@@ -458,11 +458,11 @@ async function askOnTerminal(question: string, detail?: string): Promise<boolean
  * it must never elide the middle of an argv — the interesting part of a hostile
  * command is exactly what a truncation would remove.
  */
-async function askAboutCommand(req: CommandApproval): Promise<boolean> {
+export async function askAboutCommand(req: CommandApproval): Promise<boolean> {
   if (!process.stdin.isTTY) {
     process.stderr.write(
       warn(
-        `The agent wants to run a command and there is no terminal to req.\n` +
+        `The agent wants to run a command and there is no terminal to ask.\n` +
           `  ${req.display}\n` +
           "  Refusing rather than assuming.\n",
       ),
