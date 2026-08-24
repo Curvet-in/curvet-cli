@@ -4,6 +4,26 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## Unreleased
 
+- **`@` file mentions.** Typing `@src/server.ts` in a message attaches that
+  file, so the model reads it instead of spending two or three turns hunting for
+  a path you already knew. Verified against production: a question about an
+  attached file was answered with **zero tool calls** where it would otherwise
+  have taken a `grep` and a `read_file`.
+
+  In a session, `@` opens a file picker and Tab takes the best match. It works
+  from the command line too — `curvet agent 'explain @src/config.ts'` — which is
+  the shape pipes and CI use.
+
+  A mention is a read of your disk that gets sent to the server and kept in that
+  run's history, so it goes through the same boundary the tools do: secrets
+  refused, files outside the project confirmed, and refused outright when there
+  is no terminal to ask. `@.env` is two keystrokes and a tab completion away, and
+  the cost of getting it wrong is not visible at the moment of typing.
+
+  The attachments ride in that one message and not in the conversation history —
+  a file re-sent every turn costs quadratically over the rest of the run, and the
+  model does not need it re-sent once it knows the path.
+
 - **`edit_file` — change part of a file instead of rewriting it.** `write_file`
   takes the complete new contents, so changing one line of a 950-line file meant
   reproducing the other 949: about 10,000 output tokens for a one-line change to

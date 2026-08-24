@@ -129,7 +129,14 @@ export class RunRenderer {
   constructor(
     private quiet: boolean,
     private write: (s: string) => void = (s) => process.stdout.write(s),
+    /** What the user typed, when the task sent has been expanded from it. */
+    private echoTask?: string,
   ) {}
+
+  /** Say what the person typed, so an expanded task is not read back at them. */
+  echoTypedTask(text: string): void {
+    this.echoTask = text;
+  }
 
   /** Close an open stream of deltas before printing a structural line. */
   private breakStream(): void {
@@ -150,9 +157,15 @@ export class RunRenderer {
         if (!this.quiet) this.line(ui.chrome(`run ${String(e.runId)}`));
         break;
 
-      case "run_start":
-        if (!this.quiet && e.task) this.line(ui.chrome(`▸ ${String(e.task).slice(0, 200)}`));
+      case "run_start": {
+        // The SERVER's copy of the task carries whatever we sent it, which for a
+        // message with `@` mentions is the text plus every attached file. Echo
+        // what the person typed instead — they do not need their own file read
+        // back to them, and 200 characters of it tells them nothing.
+        const shown = this.echoTask ?? (e.task ? String(e.task) : "");
+        if (!this.quiet && shown) this.line(ui.chrome(`▸ ${shown.slice(0, 200)}`));
         break;
+      }
 
       case "agent_start": {
         const name = String(e.agentName ?? e.agentId ?? "agent");
@@ -420,6 +433,23 @@ interface RunOptions {
  * Always answers. A refusal posted back is a fact the model can work with; a
  * silence just costs the run its timeout and teaches it nothing.
  */
+/**
+ * Ask the person at the terminal a yes/no question, refusing when there is not
+ * one. Shared by the tool gate and by `@` mentions, which are both "this is
+ * about to leave your machine — is that what you meant?" and must answer the
+ * same way when nobody is there.
+ */
+async function askOnTerminal(question: string, detail?: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    process.stderr.write(warn(`${question}\n${detail ?? ""}\n  No terminal to ask — refusing.\n`));
+    return false;
+  }
+  process.stderr.write(`\n${ui.ask(`! ${question}`)}\n`);
+  if (detail) process.stderr.write(ui.chrome(`${detail}\n`));
+  const answer = await ask(ui.chrome("  allow? [y/N] "));
+  return /^y(es)?$/i.test(answer.trim());
+}
+
 async function runLocalTool(
   client: Curvet,
   runId: string,
@@ -438,18 +468,7 @@ async function runLocalTool(
     // Throws on failure by design, and the executor lets it propagate: a write
     // whose backup failed is a write that cannot be undone.
     backup: (abs, original, written) => saveBackup(runId, abs, original, written).then(() => undefined),
-    confirm: async (question, detail) => {
-      if (!process.stdin.isTTY) {
-        process.stderr.write(
-          warn(`${question}\n${detail ?? ""}\n  No terminal to ask — refusing.\n`),
-        );
-        return false;
-      }
-      process.stderr.write(`\n${ui.ask(`! ${question}`)}\n`);
-      if (detail) process.stderr.write(ui.chrome(`${detail}\n`));
-      const answer = await ask(ui.chrome("  allow? [y/N] "));
-      return /^y(es)?$/i.test(answer.trim());
-    },
+    confirm: askOnTerminal,
   };
 
   // --confirm-reads gates everything, including reads inside the project. Off by
@@ -647,8 +666,10 @@ async function streamRun(
   client: Curvet,
   task: string,
   opts: RunOptions,
+  /** What the user typed, when `task` has been expanded from it. */
+  echoTask?: string,
 ): Promise<{ runId?: string; failed: boolean }> {
-  const renderer = new RunRenderer(opts.quiet === true);
+  const renderer = new RunRenderer(opts.quiet === true, undefined, echoTask);
   const access = await resolveToolAccess(opts);
   if (!opts.json && !opts.quiet) {
     // Always said out loud. Whether the agent can read this machine is the single
@@ -660,6 +681,31 @@ async function streamRun(
         : ui.chrome(`${access.why}\n`),
     );
   }
+  // `@path` works from the command line too — the shape pipes and CI use. Done
+  // after the access banner, because whether this machine is readable at all is
+  // the thing to say first, and an attachment only makes sense underneath it.
+  // Outside a project there is no boundary to measure a path against, so
+  // mentions stay as written and read to the model as plain references.
+  let sent = task;
+  if (access.enabled) {
+    const { resolveMentions } = await import("../agent/mentions.js");
+    const { task: expanded, resolved } = await resolveMentions(task, {
+      cwd: access.root,
+      confirm: askOnTerminal,
+    });
+    sent = expanded;
+    if (!opts.json && !opts.quiet) {
+      for (const r of resolved) {
+        process.stderr.write(
+          r.attached
+            ? ui.chrome(`  ⌂ attached ${r.path}${r.truncated ? " (truncated)" : ""}\n`)
+            : warn(`  ⌂ ${r.path} — ${r.reason}\n`),
+        );
+      }
+    }
+    if (sent !== task) renderer.echoTypedTask(task);
+  }
+
   const controller = new AbortController();
   let runId: string | undefined;
   let failed = false;
@@ -675,7 +721,7 @@ async function streamRun(
 
   try {
     const stream = client.agency.run({
-      task,
+      task: sent,
       modelId: opts.model,
       sessionId: opts.session,
       // Declaring a tool is a promise to execute it, so only when this client
