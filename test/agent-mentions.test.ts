@@ -324,3 +324,106 @@ describe("the picker", () => {
     expect(applyCompletion("open @odd", "src/odd name.ts")).toBe('open @"src/odd name.ts" ');
   });
 });
+
+describe("mentioning a directory", () => {
+  // A folder of icons, or of invoices, is a thing people have. Naming twelve files
+  // by hand is exactly the drudgery `@` exists to remove.
+  let root: string;
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "mention-dir-"));
+    await fs.mkdir(path.join(root, ".git"), { recursive: true });
+  });
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
+
+  function uploader() {
+    const calls: { name: string; bytes: Buffer }[] = [];
+    const fn = async (f: { name: string; bytes: Buffer }) => {
+      calls.push(f);
+      return { id: `f_${calls.length}`, name: f.name };
+    };
+    return { fn, calls };
+  }
+
+  it("expands to the attachable files inside it", async () => {
+    await fs.mkdir(path.join(root, "icons"));
+    for (const n of ["b.png", "a.png", "c.jpg"]) await fs.writeFile(path.join(root, "icons", n), png);
+    // Not attachable: must not be swept along.
+    await fs.writeFile(path.join(root, "icons", "notes.txt"), "hi");
+    await fs.writeFile(path.join(root, "icons", "build.zip"), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+    const up = uploader();
+    const { resolved, attachments } = await resolveMentions("make @icons/ brush-stroke style", { cwd: root, upload: up.fn });
+
+    // Sorted, so the order is the same twice running.
+    expect(up.calls.map((c) => c.name)).toEqual(["a.png", "b.png", "c.jpg"]);
+    expect(attachments).toHaveLength(3);
+    const dir = resolved.find((r) => r.expand);
+    expect(dir?.reason).toMatch(/3 attachable files/);
+  });
+
+  it("says how many did not fit, rather than dropping them quietly", async () => {
+    // The server keeps five per run. "5 of 12" is the number that tells you the
+    // other seven need a second message.
+    await fs.mkdir(path.join(root, "icons"));
+    for (let i = 1; i <= 12; i++) await fs.writeFile(path.join(root, "icons", `i${String(i).padStart(2, "0")}.png`), png);
+
+    const up = uploader();
+    const { resolved, attachments } = await resolveMentions("@icons/", { cwd: root, upload: up.fn });
+    expect(attachments).toHaveLength(5);
+    expect(up.calls).toHaveLength(5);
+    const dir = resolved.find((r) => r.expand);
+    expect(dir?.reason).toMatch(/12 attachable files — sending 5/);
+    // And the ones past the cap say why, individually.
+    expect(resolved.filter((r) => r.reason?.includes("5 files can be uploaded")).length).toBeGreaterThan(0);
+  });
+
+  it("a directory with nothing attachable in it still refuses", async () => {
+    // `@src` must not paste a hundred source files into one prompt.
+    await fs.mkdir(path.join(root, "src2"));
+    await fs.writeFile(path.join(root, "src2", "a.ts"), "export const a = 1;");
+    const up = uploader();
+    const { resolved, attachments } = await resolveMentions("@src2", { cwd: root, upload: up.fn });
+    expect(resolved[0].attached).toBe(false);
+    expect(resolved[0].reason).toMatch(/directory/);
+    expect(attachments).toEqual([]);
+    expect(up.calls).toHaveLength(0);
+  });
+
+  it("does not recurse", async () => {
+    // One level only. `@.` recursing would be an accident with a bill attached.
+    await fs.mkdir(path.join(root, "art", "nested"), { recursive: true });
+    await fs.writeFile(path.join(root, "art", "top.png"), png);
+    await fs.writeFile(path.join(root, "art", "nested", "deep.png"), png);
+    const up = uploader();
+    await resolveMentions("@art", { cwd: root, upload: up.fn });
+    expect(up.calls.map((c) => c.name)).toEqual(["top.png"]);
+  });
+
+  it("each expanded file is permission-checked on its own", async () => {
+    // The children must NOT inherit the directory's verdict. A folder inside the
+    // project can hold a link to a file outside it — which is the whole shape of
+    // curvet-cli#16 — so every child is classified from scratch. With no `confirm`
+    // callback an outside file is refused, and that refusal is the evidence.
+    const elsewhere = await fs.mkdtemp(path.join(os.tmpdir(), "outside-"));
+    await fs.writeFile(path.join(elsewhere, "secret.png"), png);
+    await fs.mkdir(path.join(root, "mixed"));
+    await fs.writeFile(path.join(root, "mixed", "fine.png"), png);
+    await fs.symlink(path.join(elsewhere, "secret.png"), path.join(root, "mixed", "linked.png"));
+
+    const up = uploader();
+    const { resolved, attachments } = await resolveMentions("@mixed", { cwd: root, upload: up.fn });
+
+    expect(up.calls.map((c) => c.name)).toEqual(["fine.png"]);
+    expect(attachments).toHaveLength(1);
+    const linked = resolved.find((r) => r.path.includes("linked.png"));
+    expect(linked?.attached).toBe(false);
+    expect(linked?.reason).toMatch(/outside the project/);
+
+    await fs.rm(elsewhere, { recursive: true, force: true });
+  });
+});

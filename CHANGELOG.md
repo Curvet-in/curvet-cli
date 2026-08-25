@@ -28,6 +28,16 @@ All notable changes to `@curvet/cli` are documented here.
   silently, so the sixth is refused here with a reason you can read rather than
   going missing.
 
+- **`@icons/` attaches what is in the folder.** Mentioning a directory now sends
+  the attachable files inside it — images, PDFs, spreadsheets — instead of
+  refusing. One level deep, and only those types, so `@src` still declines rather
+  than pasting a hundred source files into one prompt.
+
+  Five files per message, and the line says how many it found: `12 attachable
+  files — sending 5, the rest need another message`. Every file is
+  permission-checked on its own, so a link inside the folder that points outside
+  the project is still caught.
+
 - Requires `@curvet/sdk` 0.12.0 or newer for `agency.attach()`.
 
 ## 0.12.0

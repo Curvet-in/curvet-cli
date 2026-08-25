@@ -748,10 +748,14 @@ async function streamRun(
     attachments = parked;
     if (!opts.json && !opts.quiet) {
       for (const r of resolved) {
+        // A directory line reads as information, not as a failure — its files are
+        // listed underneath it.
         process.stderr.write(
           r.attached
             ? ui.chrome(`  ⌂ ${r.upload ? `uploaded ${r.path} (${mb(r.upload.bytes)})` : `attached ${r.path}${r.truncated ? " (truncated)" : ""}`}\n`)
-            : warn(`  ⌂ ${r.path} — ${r.reason}\n`),
+            : r.expand
+              ? ui.chrome(`  ⌂ ${r.path} — ${r.reason}\n`)
+              : warn(`  ⌂ ${r.path} — ${r.reason}\n`),
         );
       }
     }
