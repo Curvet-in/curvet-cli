@@ -514,6 +514,7 @@ async function runLocalTool(
     // whose backup failed is a write that cannot be undone.
     backup: (abs, original, written) => saveBackup(runId, abs, original, written).then(() => undefined),
     confirm: askOnTerminal,
+    upload: async ({ name, bytes }) => client.agency.attach({ data: bytes, name, sessionId: opts.session }),
   };
 
   // --confirm-reads gates everything, including reads inside the project. Off by

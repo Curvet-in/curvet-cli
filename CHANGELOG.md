@@ -2,6 +2,26 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## Unreleased
+
+- **The agent can attach a file itself.** A new `attach_file` client tool means
+  you no longer have to name every file with `@`. "Look in the icons folder and
+  restyle each one as a brush-stroke version" now works: the agent lists the
+  folder, attaches the images it finds, and edits each one by name.
+
+  It is bounded the way every local tool here is bounded, by the same
+  `classifyPath` that gates `read_file`: a secret is refused before the file is
+  opened, and anything outside the project is confirmed every time. Only types
+  the server can genuinely read as a file — PDFs, images, spreadsheets — can be
+  attached at all; a text file is pointed at `read_file` and a folder at
+  `list_dir`.
+
+  Worth being plain about what this is: `read_file` already sends the contents of
+  a local file to the server on the agent's say-so. This carries a different file
+  type through the same door, under the same rules — it is not a new kind of
+  access. What it adds is that the bytes are stored for the conversation, which is
+  why the file types are narrow and a single run is capped.
+
 ## 0.13.0
 
 - **`@photo.jpg` attaches the photo.** A mention whose type the server can read as
