@@ -101,6 +101,8 @@ export interface ResolvedMention {
   truncated?: boolean;
   /** Set when the file was UPLOADED rather than pasted into the message. */
   upload?: { id: string; name: string; bytes: number };
+  /** A directory that stands for these paths. Not itself an attachment. */
+  expand?: string[];
 }
 
 /** A file parked server-side, ready to be named in `agency.run({ attachments })`. */
@@ -158,7 +160,28 @@ async function resolveOne(opts: ResolveOptions, p: string): Promise<ResolvedMent
     return { path: p, attached: false, reason: "no such file" };
   }
   if (stat.isDirectory()) {
-    return { path: p, attached: false, reason: "that is a directory — mention a file" };
+    // A folder of icons, or of invoices, is a thing people actually have — and
+    // naming twelve files by hand is exactly the drudgery `@` exists to remove.
+    //
+    // Only ATTACHABLE types expand, and only one level deep. Expanding a source
+    // directory would paste a hundred files into one prompt, and recursing would
+    // turn `@.` into an accident with a bill attached. So a directory with no
+    // attachable files in it still gets the old refusal, which is the honest
+    // answer for `@src`.
+    let names: string[];
+    try {
+      names = await fs.readdir(verdict.abs);
+    } catch (err) {
+      return { path: p, attached: false, reason: (err as Error).message };
+    }
+    const files = names.filter((n) => UPLOADABLE.has(extOf(n))).sort();
+    if (!files.length) {
+      return { path: p, attached: false, reason: "that is a directory — mention a file" };
+    }
+    // Re-joined onto the path AS TYPED, so each child is resolved from scratch:
+    // the permission check, the size check and the upload all run per file rather
+    // than being inherited from the directory.
+    return { path: p, attached: false, expand: files.map((n) => path.posix.join(p.replace(/\/+$/, ""), n)) };
   }
 
   // A file the server can read AS A FILE goes up as bytes rather than being pasted
@@ -245,15 +268,36 @@ export async function resolveMentions(text: string, opts: ResolveOptions): Promi
   let budget = MAX_MENTIONS_TOTAL;
 
   let uploads = 0;
-  for (const m of mentions) {
+  // A directory stands for the files in it, so the work list grows as it is walked.
+  // One level only: resolveOne expands a directory and the children are plain paths,
+  // so nothing here can recurse.
+  const queue: string[] = mentions.map((m) => m.path);
+  for (let i = 0; i < queue.length; i++) {
+    const mPath = queue[i];
     // The server keeps five attachments per run and drops the rest WITHOUT
     // saying so. Stopping here is what turns that into something the user is
     // told, rather than a sixth photo that quietly never existed.
-    if (uploads >= MAX_UPLOADS && UPLOADABLE.has(extOf(m.path))) {
-      resolved.push({ path: m.path, attached: false, reason: `only ${MAX_UPLOADS} files can be uploaded per message` });
+    if (uploads >= MAX_UPLOADS && UPLOADABLE.has(extOf(mPath))) {
+      resolved.push({ path: mPath, attached: false, reason: `only ${MAX_UPLOADS} files can be uploaded per message` });
       continue;
     }
-    const r = await resolveOne(opts, m.path);
+    const r = await resolveOne(opts, mPath);
+    if (r.expand) {
+      // Say how many were found, not just how many went. "5 of 12" is the number
+      // that tells you the other seven need a second message.
+      const fits = Math.min(r.expand.length, Math.max(0, MAX_UPLOADS - uploads));
+      resolved.push({
+        path: mPath,
+        attached: false,
+        reason:
+          r.expand.length > fits
+            ? `${r.expand.length} attachable files — sending ${fits}, the rest need another message`
+            : `${r.expand.length} attachable file${r.expand.length === 1 ? "" : "s"}`,
+        expand: r.expand,
+      });
+      queue.splice(i + 1, 0, ...r.expand);
+      continue;
+    }
     if (r.upload) uploads++;
     if (r.attached && r.content !== undefined) {
       if (r.content.length > budget) {
@@ -269,7 +313,10 @@ export async function resolveMentions(text: string, opts: ResolveOptions): Promi
 
   const attached = resolved.filter((r) => r.attached && r.content);
   const uploaded = resolved.filter((r) => r.upload);
-  const failed = resolved.filter((r) => !r.attached);
+  // A directory is neither attached nor failed — it is a note about what it stood
+  // for. Listing it under "mentioned but NOT attached" would tell the model a
+  // folder went missing when in fact its contents are right there.
+  const failed = resolved.filter((r) => !r.attached && !r.expand);
 
   const parts = [text.trim()];
   if (attached.length) {

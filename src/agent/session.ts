@@ -323,8 +323,9 @@ export class AgentSession {
               ? `Uploaded ${r.path}`
               : `Attached ${r.path}${r.truncated ? " (truncated)" : ""}`
             : `${r.path} — ${r.reason}`,
+          // A directory stood for its files rather than failing to attach.
           where: "local",
-          status: r.attached ? "ok" : "failed",
+          status: r.attached ? "ok" : r.expand ? "ok" : "failed",
         });
       }
     }
