@@ -299,22 +299,30 @@ export class AgentSession {
     // model does not need it re-sent, because it now knows the exact path and
     // has read_file.
     let task = typed;
+    let attachments: { id: string; name: string }[] = [];
     if (this.opts.toolsEnabled) {
       const { resolveMentions } = await import("./mentions.js");
-      const { task: expanded, resolved } = await resolveMentions(typed, {
+      const { task: expanded, resolved, attachments: parked } = await resolveMentions(typed, {
         cwd: this.opts.cwd,
         confirm: async (question, detail) => {
           const { approved } = await this.park({ kind: "read", id: `m_${Date.now()}`, title: question, detail: detail ?? "" });
           return approved;
         },
+        upload: async ({ name, bytes }) =>
+          this.opts.client.agency.attach({ data: bytes, name, sessionId: this.sessionId }),
       });
       task = expanded;
+      attachments = parked;
       for (const r of resolved) {
         this.addEntry({
           kind: "tool",
           id: `mention_${r.path}_${Date.now()}`,
           name: "attach",
-          title: r.attached ? `Attached ${r.path}${r.truncated ? " (truncated)" : ""}` : `${r.path} — ${r.reason}`,
+          title: r.attached
+            ? r.upload
+              ? `Uploaded ${r.path}`
+              : `Attached ${r.path}${r.truncated ? " (truncated)" : ""}`
+            : `${r.path} — ${r.reason}`,
           where: "local",
           status: r.attached ? "ok" : "failed",
         });
@@ -329,6 +337,7 @@ export class AgentSession {
         task,
         modelId: this.opts.model,
         sessionId: this.sessionId,
+        attachments: attachments.length ? attachments : undefined,
         history: this.history().slice(0, -1), // everything before the message just added
         clientTools: this.opts.toolsEnabled ? SUPPORTED_TOOLS : undefined,
         signal: this.controller.signal,

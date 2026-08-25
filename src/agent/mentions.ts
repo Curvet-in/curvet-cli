@@ -37,6 +37,29 @@ export const MAX_MENTION_CHARS = 24_000;
 export const MAX_MENTIONS_TOTAL = MAX_RESULT_CHARS;
 /** Most files one message may attach. */
 export const MAX_MENTIONS = 10;
+/**
+ * Most files one message may UPLOAD. Agency keeps five attachments per run and
+ * drops the rest silently, so stopping at five here is what lets us say which
+ * ones did not go rather than leaving the user to notice later.
+ */
+export const MAX_UPLOADS = 5;
+
+/**
+ * Extensions the server can actually read as a file rather than as text.
+ *
+ * Deliberately the set agency/attachmentExtract classifies — PDFs, the four image
+ * types, and Excel. Anything else binary is still refused, because uploading a
+ * `.zip` or a `.mp4` costs the transfer and the storage and then the model cannot
+ * open it either.
+ */
+const UPLOADABLE = new Set(["pdf", "png", "jpg", "jpeg", "gif", "webp", "xlsx", "xlsm", "xltx"]);
+
+/** 50MB, matching the server's own limit, so an oversized file fails here. */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+function extOf(p: string): string {
+  return (p.split(/[\\/]/).pop() ?? "").split(".").pop()?.toLowerCase() ?? "";
+}
 
 export interface Mention {
   /** Exactly as typed, `@` included, so it can be found in the text again. */
@@ -76,10 +99,26 @@ export interface ResolvedMention {
   reason?: string;
   content?: string;
   truncated?: boolean;
+  /** Set when the file was UPLOADED rather than pasted into the message. */
+  upload?: { id: string; name: string; bytes: number };
+}
+
+/** A file parked server-side, ready to be named in `agency.run({ attachments })`. */
+export interface UploadedAttachment {
+  id: string;
+  name: string;
 }
 
 export interface ResolveOptions {
   cwd: string;
+  /**
+   * Park a binary file server-side and return its id.
+   *
+   * Absent means there is nowhere to put one — an offline caller, or a test —
+   * and binaries are refused exactly as they were before this existed. That is
+   * the same shape as `confirm`: no facility, no action, said out loud.
+   */
+  upload?: (file: { name: string; bytes: Buffer }) => Promise<{ id: string; name: string }>;
   /**
    * Ask about a file outside the project. Absent means there is nobody to ask,
    * which is a refusal — the same rule the tools follow.
@@ -122,6 +161,38 @@ async function resolveOne(opts: ResolveOptions, p: string): Promise<ResolvedMent
     return { path: p, attached: false, reason: "that is a directory — mention a file" };
   }
 
+  // A file the server can read AS A FILE goes up as bytes rather than being pasted
+  // in as text. This is the older approach the parked-upload path was written to
+  // replace: a PDF transcribed into the prompt loses its layout, tables and charts,
+  // and a photo cannot be transcribed at all — which is why `@photo.jpg` used to be
+  // refused outright rather than merely degraded.
+  if (UPLOADABLE.has(extOf(verdict.abs))) {
+    if (!opts.upload) {
+      return { path: p, attached: false, reason: "this client cannot upload files" };
+    }
+    if (stat.size > MAX_UPLOAD_BYTES) {
+      return { path: p, attached: false, reason: `it is ${Math.round(stat.size / 1024 / 1024)}MB, over the 50MB limit` };
+    }
+    if (stat.size === 0) {
+      return { path: p, attached: false, reason: "that file is empty" };
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await fs.readFile(verdict.abs);
+    } catch (err) {
+      return { path: p, attached: false, reason: (err as Error).message };
+    }
+    const name = path.basename(verdict.abs);
+    try {
+      const parked = await opts.upload({ name, bytes });
+      return { path: p, attached: true, upload: { id: parked.id, name: parked.name || name, bytes: stat.size } };
+    } catch (err) {
+      // Say what actually happened. "Attachment failed" sends the user to check the
+      // file when the answer is usually the network or their credit balance.
+      return { path: p, attached: false, reason: `upload failed — ${(err as Error).message}` };
+    }
+  }
+
   let text: string;
   try {
     text = await fs.readFile(verdict.abs, "utf8");
@@ -133,7 +204,11 @@ async function resolveOne(opts: ResolveOptions, p: string): Promise<ResolvedMent
   // teaches the model nothing and costs a fortune to carry. A NUL byte near the
   // start is the cheap, boring test for one.
   if (text.slice(0, 8_000).includes("\u0000")) {
-    return { path: p, attached: false, reason: "that looks like a binary file" };
+    return {
+      path: p,
+      attached: false,
+      reason: "that looks like a binary file — only PDFs, images and spreadsheets can be uploaded",
+    };
   }
 
   const truncated = text.length > MAX_MENTION_CHARS;
@@ -149,6 +224,8 @@ export interface ResolvedMessage {
   /** What to send: the user's own words, with the attachments appended. */
   task: string;
   resolved: ResolvedMention[];
+  /** Files parked server-side. Pass straight to `agency.run({ attachments })`. */
+  attachments: UploadedAttachment[];
 }
 
 /**
@@ -162,13 +239,22 @@ export interface ResolvedMessage {
  */
 export async function resolveMentions(text: string, opts: ResolveOptions): Promise<ResolvedMessage> {
   const mentions = parseMentions(text).slice(0, MAX_MENTIONS);
-  if (!mentions.length) return { task: text, resolved: [] };
+  if (!mentions.length) return { task: text, resolved: [], attachments: [] };
 
   const resolved: ResolvedMention[] = [];
   let budget = MAX_MENTIONS_TOTAL;
 
+  let uploads = 0;
   for (const m of mentions) {
+    // The server keeps five attachments per run and drops the rest WITHOUT
+    // saying so. Stopping here is what turns that into something the user is
+    // told, rather than a sixth photo that quietly never existed.
+    if (uploads >= MAX_UPLOADS && UPLOADABLE.has(extOf(m.path))) {
+      resolved.push({ path: m.path, attached: false, reason: `only ${MAX_UPLOADS} files can be uploaded per message` });
+      continue;
+    }
     const r = await resolveOne(opts, m.path);
+    if (r.upload) uploads++;
     if (r.attached && r.content !== undefined) {
       if (r.content.length > budget) {
         // Truncate rather than drop: part of a file the user asked for is more
@@ -182,6 +268,7 @@ export async function resolveMentions(text: string, opts: ResolveOptions): Promi
   }
 
   const attached = resolved.filter((r) => r.attached && r.content);
+  const uploaded = resolved.filter((r) => r.upload);
   const failed = resolved.filter((r) => !r.attached);
 
   const parts = [text.trim()];
@@ -199,6 +286,18 @@ export async function resolveMentions(text: string, opts: ResolveOptions): Promi
       }
     }
   }
+  if (uploaded.length) {
+    // The bytes are NOT in this text — they reach the model as content blocks. What
+    // goes here is the naming, because the media tools address a source by file name
+    // and the model needs to know which names it may use.
+    parts.push(
+      "",
+      "--- Files the user attached to this message with @ ---",
+      "These are attached to this conversation as files and you can see them directly.",
+      "Refer to one by its NAME (for example as `source` on generate_image):",
+    );
+    for (const u of uploaded) parts.push(`${u.upload!.name}  (from ${u.path})`);
+  }
   if (failed.length) {
     // Tell the model too, not only the user. Otherwise it sees a reference to a
     // file that is not there and quietly assumes it was irrelevant.
@@ -206,7 +305,11 @@ export async function resolveMentions(text: string, opts: ResolveOptions): Promi
     for (const f of failed) parts.push(`${f.path} — ${f.reason}`);
   }
 
-  return { task: parts.join("\n"), resolved };
+  return {
+    task: parts.join("\n"),
+    resolved,
+    attachments: uploaded.map((u) => ({ id: u.upload!.id, name: u.upload!.name })),
+  };
 }
 
 /** Directories never worth offering in a picker, and never worth walking. */
