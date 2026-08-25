@@ -2,6 +2,34 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## Unreleased
+
+- **`@photo.jpg` attaches the photo.** A mention whose type the server can read as
+  a file — PDF, PNG, JPEG, GIF, WebP, and Excel — is now uploaded and attached to
+  the run instead of being refused. Text files are unchanged: they are still read
+  and pasted into the message, which is the right thing for source and prose and
+  impossible for a photo.
+
+  That is what makes "here are five product photos, change the background" a
+  thing you can say in a terminal. The model sees the real image — layout,
+  colour, the actual product — rather than a description of it, and can edit it
+  by name: `generate_image` takes a `source`, so "put this on a wooden desk"
+  operates on your file rather than generating a different picture of roughly the
+  same subject.
+
+  Bytes never enter the message text. They travel as content blocks; the message
+  carries the file NAME, because the name is the handle the media tools take.
+
+  The permission rules are unchanged and are the same ones `read_file` follows: a
+  secret is refused before the file is opened, and a file outside the project is
+  confirmed every time. Uploading does not get an exemption for being an upload.
+
+  Five files per message. The server keeps five per run and drops the rest
+  silently, so the sixth is refused here with a reason you can read rather than
+  going missing.
+
+- Requires `@curvet/sdk` 0.12.0 or newer for `agency.attach()`.
+
 ## 0.12.0
 
 - **`run_command` — run tests, builds, git and linters on your machine.** The
