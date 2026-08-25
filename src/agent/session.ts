@@ -245,6 +245,8 @@ export class AgentSession {
         return approved;
       },
       backup: (abs, original, written) => saveBackup(runId, abs, original, written).then(() => undefined),
+      upload: async ({ name, bytes }) =>
+        this.opts.client.agency.attach({ data: bytes, name, sessionId: this.sessionId }),
     };
   }
 

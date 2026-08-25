@@ -75,6 +75,12 @@ export interface ToolContext {
    * per-project opt-in for build tools that genuinely need one.
    */
   commandEnv?: string[];
+  /**
+   * Park a file server-side and return its id. Absent means this client cannot
+   * upload, and `attach_file` refuses rather than pretending — the same rule
+   * `confirmWrite` and `confirmCommand` follow.
+   */
+  upload?: (file: { name: string; bytes: Buffer }) => Promise<{ id: string; name: string }>;
   /** Aborts a running command when the run is aborted. */
   signal?: AbortSignal;
 }
@@ -138,6 +144,82 @@ async function gate(ctx: ToolContext, request: string, verb: string): Promise<{ 
 
 function isOutcome(v: { abs: string } | ToolOutcome): v is ToolOutcome {
   return (v as ToolOutcome).ok !== undefined;
+}
+
+// ---- attach_file ------------------------------------------------------------
+
+/** What the server can read as a file. Mirrors the `@` mention set. */
+const ATTACHABLE = new Set(["pdf", "png", "jpg", "jpeg", "gif", "webp", "xlsx", "xlsm", "xltx"]);
+/** 50MB, the server's own multer limit, so an oversized file fails here. */
+const MAX_ATTACH_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Send one local file to the run, so the media tools can act on it by name.
+ *
+ * This is the first client tool that MOVES data rather than reading it, and the
+ * boundary is the same one every other tool here sits behind — `gate` is
+ * `classifyPath`, so a secret is refused before the file is opened and anything
+ * outside the project is confirmed every time.
+ *
+ * Worth being explicit about why that is sufficient rather than merely
+ * consistent: `read_file` already sends the CONTENTS of a local file to the same
+ * server, on the same model's say-so. This carries a different file type through
+ * the same door. What it is not is a new class of exposure — and if the rules
+ * were ever wrong, they would already have been wrong for `read_file`.
+ *
+ * What it adds instead is durability: bytes read by `read_file` are text in a
+ * prompt, while these are stored server-side for the conversation. That is why
+ * the type list is narrow — only what the server can genuinely read as a file —
+ * and why the run caps how many one run may pull.
+ */
+export async function attachFile(ctx: ToolContext, input: Record<string, unknown>): Promise<ToolOutcome> {
+  const request = String(input.path ?? "");
+  if (!request) return { ok: false, error: "No path was given." };
+  if (!ctx.upload) {
+    return { ok: false, error: "This client cannot attach files. Ask the user to attach it to their message with @." };
+  }
+
+  const ext = (request.split(/[\\/]/).pop() ?? "").split(".").pop()?.toLowerCase() ?? "";
+  if (!ATTACHABLE.has(ext)) {
+    // Naming the set beats "unsupported": the model's next move should be
+    // read_file for a text file, not another attach with a different extension.
+    return {
+      ok: false,
+      error: `"${request}" cannot be attached. Only PDFs, images (png, jpg, gif, webp) and spreadsheets (xlsx) can be. For a text file use read_file; for a folder use list_dir and attach what is inside it.`,
+    };
+  }
+
+  const gated = await gate(ctx, request, "Attach");
+  if (isOutcome(gated)) return gated;
+
+  let bytes: Buffer;
+  try {
+    const stat = await fs.stat(gated.abs);
+    if (stat.isDirectory()) {
+      return { ok: false, error: `"${request}" is a directory. Use list_dir, then attach the files you want one at a time.` };
+    }
+    if (stat.size === 0) return { ok: false, error: `"${request}" is empty.` };
+    if (stat.size > MAX_ATTACH_BYTES) {
+      return { ok: false, error: `"${request}" is ${Math.round(stat.size / 1024 / 1024)}MB, over the 50MB limit.` };
+    }
+    bytes = await fs.readFile(gated.abs);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === "ENOENT") return { ok: false, error: `"${request}" does not exist.` };
+    if (e.code === "EACCES") return { ok: false, error: `"${request}" is not readable.` };
+    return { ok: false, error: `Could not read "${request}": ${e.message}` };
+  }
+
+  const name = path.basename(gated.abs);
+  try {
+    const parked = await ctx.upload({ name, bytes });
+    // JSON because the server needs the id to resolve the file later, and a
+    // sentence would have to be parsed. agency/tools.js turns this into the
+    // sentence the model actually reads.
+    return { ok: true, content: JSON.stringify({ id: parked.id, name: parked.name || name }) };
+  } catch (err) {
+    return { ok: false, error: `Could not attach "${request}": ${(err as Error).message}` };
+  }
 }
 
 // ---- read_file --------------------------------------------------------------
@@ -632,10 +714,10 @@ async function isReadable(ctx: ToolContext, abs: string): Promise<boolean> {
 
 // ---- dispatch ---------------------------------------------------------------
 
-export type ToolName = "read_file" | "list_dir" | "grep" | "write_file" | "edit_file" | "run_command";
+export type ToolName = "read_file" | "list_dir" | "grep" | "write_file" | "edit_file" | "run_command" | "attach_file";
 
 /** Everything this client can execute. Declared to the server verbatim. */
-export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file", "edit_file", "run_command"];
+export const SUPPORTED_TOOLS: ToolName[] = ["read_file", "list_dir", "grep", "write_file", "edit_file", "run_command", "attach_file"];
 
 /**
  * The tools that change files.
@@ -669,6 +751,7 @@ const EXECUTORS: Record<ToolName, (ctx: ToolContext, input: Record<string, unkno
   write_file: writeFile,
   edit_file: editFile,
   run_command: runCommandTool,
+  attach_file: attachFile,
 };
 
 /**
