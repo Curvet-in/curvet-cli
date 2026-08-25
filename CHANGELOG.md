@@ -2,7 +2,7 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
-## Unreleased
+## 0.13.0
 
 - **`@photo.jpg` attaches the photo.** A mention whose type the server can read as
   a file — PDF, PNG, JPEG, GIF, WebP, and Excel — is now uploaded and attached to
