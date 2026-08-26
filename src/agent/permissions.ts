@@ -143,7 +143,12 @@ export function secretReason(absPath: string): string | null {
   if (ENV_EXAMPLE.test(base)) return null;
 
   for (const segment of absPath.split(path.sep)) {
-    if (SECRET_DIRS.has(segment.toLowerCase())) return `${segment}/ holds credentials`;
+    // A NOUN PHRASE, because the only caller says "… is a ${reason}". The dir case
+    // used to return "`.ssh/ holds credentials`", which rendered as
+    // "\".ssh/id.png\" is a .ssh/ holds credentials" — ungrammatical in the one
+    // message a user reads when something is refused, and in the one the model
+    // reads before deciding whether to try a different path.
+    if (SECRET_DIRS.has(segment.toLowerCase())) return `file inside ${segment}/, which holds credentials`;
   }
   for (const { re, what } of SECRET_PATTERNS) {
     if (re.test(base)) return what;
