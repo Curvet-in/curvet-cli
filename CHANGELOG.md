@@ -2,7 +2,7 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
-## Unreleased
+## 0.13.1
 
 - **The agent can attach a file itself.** A new `attach_file` client tool means
   you no longer have to name every file with `@`. "Look in the icons folder and
