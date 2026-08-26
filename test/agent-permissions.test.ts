@@ -632,3 +632,24 @@ describe("the executors enforce it", () => {
     expect(out.content).toMatch(/settings\.json:1:/);
   });
 });
+
+describe("refusal wording", () => {
+  // The refusal is read by two audiences: the person who typed the path, and the
+  // model deciding whether to try another way in. Both got
+  // `".ssh/x.png" is a .ssh/ holds credentials` — the reason and the sentence
+  // around it were written by different hands and never read together.
+  it("reads as a sentence for a secret directory as well as a secret name", () => {
+    for (const [file, expected] of [
+      [".ssh/backup.png", /is a file inside \.ssh\/, which holds credentials/],
+      ["config/.env", /is a \.env file/],
+      ["certs/server.pem", /is a private key or certificate/],
+    ] as [string, RegExp][]) {
+      const reason = secretReason(path.resolve("/proj", file));
+      expect(reason, file).not.toBeNull();
+      const msg = denialMessage(file, reason!);
+      expect(msg, file).toMatch(expected);
+      // No sentence in it may read as two clauses jammed together.
+      expect(msg, file).not.toMatch(/is a \S+\/ /);
+    }
+  });
+});
