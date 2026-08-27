@@ -698,14 +698,29 @@ async function resolveToolAccess(opts: RunOptions): Promise<{ enabled: boolean; 
 
   if (opts.tools === false) return { enabled: false, root: cwd, why: "file access off (--no-tools)" };
   if (opts.tools === true) {
-    return { enabled: true, root: root ?? cwd, why: root ? `project ${root}` : `${cwd} (not a project — forced with --tools)` };
+    return { enabled: true, root: root ?? cwd, why: root ? `project ${root}` : `${cwd} (forced with --tools)` };
   }
   if (root) return { enabled: true, root, why: `project ${root}` };
-  return {
-    enabled: false,
-    root: cwd,
-    why: `${cwd} is not inside a project, so file access is off. Use --tools to allow it here anyway.`,
-  };
+
+  // Not a project. On by default anyway: `~/Downloads/photos` is exactly where the
+  // files people want worked on live, and being refused there taught nobody
+  // anything — it printed `read-only` at the end of a status line and let three
+  // attempts fail with answers about a filesystem on the server.
+  //
+  // The exception is your account as a whole. Turning access on makes the root the
+  // inside boundary, and reads inside it do not ask. A folder is a reasonable thing
+  // to hand over on those terms; everything you own is not, and the secret denylist
+  // cannot carry it — it matches conventional names, and ~/notes/passwords.txt is
+  // not one.
+  const { isHomeOrAbove } = await import("../agent/permissions.js");
+  if (isHomeOrAbove(cwd)) {
+    return {
+      enabled: false,
+      root: cwd,
+      why: `${cwd} is your home directory, so file access is off here — everything you own is under it. cd into the folder you mean, or use --tools to allow it anyway.`,
+    };
+  }
+  return { enabled: true, root: cwd, why: `${cwd} (not a project)` };
 }
 
 async function streamRun(

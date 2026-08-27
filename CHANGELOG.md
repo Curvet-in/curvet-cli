@@ -4,6 +4,20 @@ All notable changes to `@curvet/cli` are documented here.
 
 ## Unreleased
 
+- **File access is on by default outside a project too.** It used to be on inside
+  a project and off everywhere else, which was right about the risk and wrong
+  about where people keep their files — `~/Downloads/photos` is exactly where the
+  things you want worked on live.
+
+  The line has moved from "is this a project" to "is this your whole account".
+  Any ordinary folder is on; your home directory, anything above it, and the
+  filesystem root stay off, because switching access on makes that directory the
+  boundary inside which reads do not ask. A folder of photos is a reasonable thing
+  to hand over on those terms; everything you own is not.
+
+  `--no-tools` still turns it off anywhere, and `--tools` still forces it on —
+  including in your home directory, if that is genuinely what you want.
+
 - **`@` now tells you when it cannot work.** Outside a project, file access is off
   and `@something` was silently inert — the text went to the model as typed and
   nothing anywhere said why. You would see three attempts fail with answers about
