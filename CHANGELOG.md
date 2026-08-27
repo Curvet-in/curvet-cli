@@ -2,7 +2,7 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
-## Unreleased
+## 0.14.0
 
 - **File access is on by default outside a project too.** It used to be on inside
   a project and off everywhere else, which was right about the risk and wrong
