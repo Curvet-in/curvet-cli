@@ -99,6 +99,8 @@ export interface SessionOptions {
   cwd: string;
   /** Whether this session may touch the machine at all. */
   toolsEnabled: boolean;
+  /** Why file access is off, in the user's terms. Shown when a mention cannot work. */
+  toolsWhy?: string;
   /** Ask about reads that would otherwise pass silently. */
   confirmReads?: boolean;
   model?: string;
@@ -302,6 +304,23 @@ export class AgentSession {
     // has read_file.
     let task = typed;
     let attachments: { id: string; name: string }[] = [];
+    if (!this.opts.toolsEnabled) {
+      // `@` is inert with file access off, and inert used to mean silent: the text
+      // went to the model verbatim and nobody was told. Say it to both ends.
+      const { mentionsUnavailable } = await import("./mentions.js");
+      const note = mentionsUnavailable(typed, this.opts.toolsWhy ?? "file access is off for this session");
+      if (note) {
+        task = typed + note.forModel;
+        this.addEntry({
+          kind: "tool",
+          id: `mention_off_${Date.now()}`,
+          name: "attach",
+          title: note.forUser,
+          where: "local",
+          status: "failed",
+        });
+      }
+    }
     if (this.opts.toolsEnabled) {
       const { resolveMentions } = await import("./mentions.js");
       const { task: expanded, resolved, attachments: parked } = await resolveMentions(typed, {

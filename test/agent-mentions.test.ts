@@ -10,6 +10,7 @@ import {
   activeMention,
   applyCompletion,
   MAX_MENTION_CHARS,
+  mentionsUnavailable,
 } from "../src/agent/mentions.js";
 
 /**
@@ -425,5 +426,36 @@ describe("mentioning a directory", () => {
     expect(linked?.reason).toMatch(/outside the project/);
 
     await fs.rm(elsewhere, { recursive: true, force: true });
+  });
+});
+
+describe("mentions when file access is off", () => {
+  // The failure this closes had no error anywhere. Someone standing in a folder of
+  // photos typed "@~/Downloads/rhyrhy", then "@.", then "@images/". Each went to the
+  // model as literal text, the model had no client tools, so it ran `ls` in the
+  // server's sandbox and told them "the current project directory is empty".
+  //
+  // Three keystrokes, three misleading answers, and nothing anywhere said "file
+  // access is off for this session, use --tools".
+  it("says which mentions could not be attached, and why", () => {
+    const note = mentionsUnavailable("@images/ and @notes.md please", "not inside a project");
+    expect(note).not.toBeNull();
+    expect(note!.forUser).toContain("images/");
+    expect(note!.forUser).toContain("notes.md");
+    expect(note!.forUser).toContain("not inside a project");
+  });
+
+  it("tells the MODEL not to substitute the server's filesystem", () => {
+    // Without this the model reaches for run_code and describes a container as the
+    // user's folder — which is worse than admitting it cannot look.
+    const note = mentionsUnavailable("@images/", "not inside a project");
+    expect(note!.forModel).toMatch(/run_code/);
+    expect(note!.forModel).toMatch(/not on their machine/i);
+    expect(note!.forModel).toMatch(/--tools/);
+  });
+
+  it("stays quiet when there is nothing to say", () => {
+    expect(mentionsUnavailable("just a normal question", "off")).toBeNull();
+    expect(mentionsUnavailable("email me at hello@curvet.in", "off")).toBeNull();
   });
 });

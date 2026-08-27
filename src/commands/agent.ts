@@ -738,6 +738,19 @@ async function streamRun(
 
   let sent = task;
   let attachments: { id: string; name: string }[] = [];
+  if (!access.enabled) {
+    const { mentionsUnavailable } = await import("../agent/mentions.js");
+    const note = mentionsUnavailable(task, access.why);
+    if (note) {
+      sent = task + note.forModel;
+      if (!opts.json && !opts.quiet) {
+        process.stderr.write(warn(`  ⌂ ${note.forUser}\n`));
+        // Echo what they TYPED. The note is for the model; printing it back at the
+        // user turns a one-line explanation into a wall of system text.
+        renderer.echoTypedTask(task);
+      }
+    }
+  }
   if (access.enabled) {
     const { resolveMentions } = await import("../agent/mentions.js");
     const { task: expanded, resolved, attachments: parked } = await resolveMentions(task, {
@@ -1020,6 +1033,7 @@ export function agentCommand(): Command {
             client,
             cwd: access.root,
             toolsEnabled: access.enabled,
+            toolsWhy: access.why,
             confirmReads: opts.confirmReads === true,
             model: opts.model,
             sessionId: opts.session,
