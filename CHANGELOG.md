@@ -2,6 +2,24 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## Unreleased
+
+- **`@` now tells you when it cannot work.** Outside a project, file access is off
+  and `@something` was silently inert — the text went to the model as typed and
+  nothing anywhere said why. You would see three attempts fail with answers about
+  a "file system constraint on this server" and no hint that the fix was one flag.
+
+  It now names the paths that were not attached, says why, and says what to do:
+  `images/ not attached — … is not inside a project, so file access is off. Use
+  --tools to allow it here anyway.`
+
+  The model is told as well, and told not to go looking for a substitute — with no
+  local tools it would otherwise inspect the server's sandbox and describe it as
+  your folder.
+
+- A refused secret reads as a sentence again: `".ssh/x.png" is a file inside
+  .ssh/, which holds credentials` rather than `is a .ssh/ holds credentials`.
+
 ## 0.13.1
 
 - **The agent can attach a file itself.** A new `attach_file` client tool means

@@ -111,6 +111,35 @@ export interface UploadedAttachment {
   name: string;
 }
 
+/**
+ * What to say when the user typed `@something` and this session cannot read their
+ * disk at all.
+ *
+ * Returning the message rather than resolving is the whole point. `@` is silently
+ * inert when file access is off — the text goes to the model verbatim, and both
+ * ends are left guessing. Someone in a folder of photos typed `@~/Downloads/x`,
+ * `@.` and `@images/` in turn, got prose about "a file system constraint on this
+ * server" each time, and had no way to learn that the answer was one flag.
+ *
+ * Returns null when there is nothing to say.
+ */
+export function mentionsUnavailable(text: string, reason: string): { forUser: string; forModel: string } | null {
+  const mentions = parseMentions(text);
+  if (!mentions.length) return null;
+  const names = mentions.map((m) => m.path).slice(0, MAX_MENTIONS);
+  return {
+    forUser: `${names.join(", ")} not attached — ${reason}`,
+    // The model has to be told too, and told what NOT to do about it: with no
+    // client tools it will otherwise reach for run_code and describe the server's
+    // sandbox as though it were the user's folder.
+    forModel:
+      `\n\n[SYSTEM: The user wrote ${names.map((n) => `"@${n}"`).join(", ")} to attach ${names.length === 1 ? "a file" : "files"} from their own machine, ` +
+      `but file access is OFF for this session (${reason}). You have NO way to read their disk here. ` +
+      `Do NOT use run_code or any other tool to inspect a filesystem — it runs on the server, not on their machine, and describing it as their folder would be wrong. ` +
+      `Tell them file access is off for this session and that restarting with --tools turns it on.]`,
+  };
+}
+
 export interface ResolveOptions {
   cwd: string;
   /**
