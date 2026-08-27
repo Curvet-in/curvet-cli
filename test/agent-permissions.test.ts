@@ -10,6 +10,7 @@ import {
   findProjectRoot,
   refusalReason,
   denialMessage,
+  isHomeOrAbove,
 } from "../src/agent/permissions.js";
 import { execute, type ToolContext } from "../src/agent/tools.js";
 import type { FileDiff } from "../src/agent/diff.js";
@@ -651,5 +652,37 @@ describe("refusal wording", () => {
       // No sentence in it may read as two clauses jammed together.
       expect(msg, file).not.toMatch(/is a \S+\/ /);
     }
+  });
+});
+
+describe("where file access is on by default", () => {
+  // The default used to be "on inside a project, off everywhere else". That was
+  // right about the risk and wrong about where people keep their files: someone in
+  // ~/Downloads/photos typed @ three times, got answers about a filesystem on the
+  // server, and never learned that a flag existed.
+  //
+  // So: on by default anywhere EXCEPT your account as a whole. The line moved from
+  // "is it a project" to "is it everything you own", because what turning access on
+  // does is make the root the inside boundary, and reads inside it do not ask.
+  const home = process.env.HOME || "/home/nobody";
+
+  it("treats home, its ancestors and the filesystem root as too broad", () => {
+    expect(isHomeOrAbove(home)).toBe(true);
+    expect(isHomeOrAbove(path.dirname(home))).toBe(true);
+    expect(isHomeOrAbove("/")).toBe(true);
+    expect(isHomeOrAbove(path.resolve(home, "..", "."))).toBe(true);
+  });
+
+  it("treats an ordinary folder under home as fine", () => {
+    expect(isHomeOrAbove(path.join(home, "Downloads"))).toBe(false);
+    expect(isHomeOrAbove(path.join(home, "Downloads", "rhyrhy"))).toBe(false);
+    expect(isHomeOrAbove(path.join(home, "WebD", "curvet"))).toBe(false);
+  });
+
+  it("is not fooled by a path that walks back up to home", () => {
+    // `~/Downloads/../` is home. A string comparison would miss it; the check
+    // resolves first, which is the same reasoning classifyPath follows.
+    expect(isHomeOrAbove(path.join(home, "Downloads", ".."))).toBe(true);
+    expect(isHomeOrAbove(path.join(home, "a", "b", "..", "..", ".."))).toBe(true);
   });
 });

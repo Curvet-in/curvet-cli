@@ -104,6 +104,30 @@ export async function findProjectRoot(from: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Is this directory your whole account — home itself, something above it, or the
+ * filesystem root?
+ *
+ * File access is on by default anywhere else, including folders that are not
+ * projects, because `~/Downloads/photos` is exactly where the files people want
+ * worked on actually live and refusing there taught nobody anything.
+ *
+ * The line is drawn here rather than at "is it a project" because of what turning
+ * access on DOES: the root becomes the inside-the-project boundary, and reads
+ * inside it are allowed without asking. A folder of photos is a fine thing to hand
+ * over on that basis. Everything you own is not — and the secret denylist cannot
+ * carry it, because it recognises conventional names (`.env`, `*.pem`, `.ssh/`)
+ * and `~/notes/passwords.txt` is not one.
+ */
+export function isHomeOrAbove(dir: string): boolean {
+  const d = path.resolve(dir);
+  if (path.dirname(d) === d) return true; // filesystem root
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  if (!home) return false;
+  // Home at or beneath `d` means d IS home, or an ancestor of it.
+  return isInside(d, path.resolve(home));
+}
+
 export type Verdict =
   | { decision: "allow"; scope: "inside" }
   | { decision: "confirm"; scope: "outside"; display: string }
