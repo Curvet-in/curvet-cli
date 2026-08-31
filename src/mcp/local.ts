@@ -3,14 +3,15 @@ import path from "node:path";
 import type { Curvet } from "@curvet/sdk";
 import { classifyPath, findProjectRoot, denialMessage } from "../agent/permissions.js";
 import { mimeFor } from "../commands/stt.js";
-import type { AttachOutcome, AttachResolver, TranscribeResolver } from "./types.js";
+import type { AttachOutcome, AttachResolver, TranscribeResolver } from "@curvet/mcp";
 
 /**
  * The half of the MCP server that needs the user's machine.
  *
- * It lives outside `src/mcp/` on purpose: that module is meant to be served from
- * the backend too, where none of this exists. These are the resolvers it takes
- * as dependencies, built for the local stdio host.
+ * The tools themselves live in `@curvet/mcp`, which is also served from the
+ * backend, where none of this exists — no filesystem, no project, no path to
+ * classify. These are the resolvers that module takes as dependencies, built for
+ * the local stdio host and supplied only by it.
  *
  * ### Why there is no confirmation prompt in here
  *
