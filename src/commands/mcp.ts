@@ -1,16 +1,15 @@
 import { Command } from "commander";
 import { resolveProfile } from "../config.js";
 import { makeClient } from "../client.js";
-import { catalogueFor } from "../models.js";
-import { buildServer, capabilitiesFor, instructionsFor, toolNamesFor } from "../mcp/index.js";
+import { buildServer, capabilitiesFor, instructionsFor, toolNamesFor } from "@curvet/mcp";
 import { attachmentRoot, makeAttachResolver, makeTranscribeResolver } from "../mcp/local.js";
 
 /**
  * `curvet mcp` — Curvet as an MCP server over stdio.
  *
- * The tools themselves are in `src/mcp/`, which knows nothing about a terminal:
- * the same set is meant to be served over HTTP from the backend, and anything
- * that needs the user's machine is injected from here. See
+ * The tools themselves are in `@curvet/mcp`, which knows nothing about a
+ * terminal: the backend serves that same module over HTTP, and anything needing
+ * the user's machine is injected from here. See
  * darkapp-haven/documentation/MCP_REVAMP_PLAN.md §0.
  *
  * This file used to call `requireAppKey` and exit, which is why the entire
@@ -48,7 +47,6 @@ export function mcpCommand(): Command {
         {
           client,
           capabilities,
-          catalogue: catalogueFor(profile, client),
           defaultModel: profile.defaultModel,
           attach: makeAttachResolver(client, root),
           transcribe: makeTranscribeResolver(client, root),
