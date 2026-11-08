@@ -145,7 +145,7 @@ $ curvet embed -m all-minilm-l6-v2 "the quick brown fox"
 | Model | Dimensions | Max input per text | Also accepted as |
 |---|---|---|---|
 | `text-embedding-3-small` | 1536 | 8191 tokens | `openai/text-embedding-3-small` |
-| `all-minilm-l6-v2` | 384 | 512 tokens | `sentence-transformers/all-minilm-l6-v2` |
+| `all-minilm-l6-v2` | 384 | 256 tokens (about 1,000 characters) | `sentence-transformers/all-minilm-l6-v2` |
 
 `curvet models --type embedding` lists the ones your key can call. `--lines`
 sends every line in one request, up to 2,048 of them; a text over the model's
