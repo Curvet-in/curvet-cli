@@ -2,6 +2,60 @@
 
 All notable changes to `@curvet/cli` are documented here.
 
+## Unreleased
+
+- **`curvet embed` turns text into vectors.** `curvet embed "the quick brown fox"`
+  prints each vector as its length and first few components — `384 dims  [0.0123,
+  -0.0456, 0.0789, 0.0012, …]` — with the cost line underneath. `--lines` embeds
+  every non-empty line of the input as its own text, in one request, and `--json`
+  prints the whole response, vectors included, as one line. `curvet models --type
+  embedding` lists the models: `text-embedding-3-small` and `all-minilm-l6-v2` to
+  start with.
+
+  The model is checked against the catalogue before the call, as `chat`, `image`
+  and `stt` already were, so `curvet embed -m gpt-4o-mini` is refused for free and
+  pointed at `curvet chat` instead.
+
+- **`curvet proxy` forwards `/v1/embeddings`**, with or without the `/v1` prefix,
+  so a tool pointed at the proxy for chat can embed through it too.
+
+- **OpenRouter-style ids get an answer.** `-m` accepts any alias the server
+  publishes for a model — `-m meta-llama/llama-3.3-70b-instruct` runs
+  `llama-3.3-70b`, which is the id sent and the one the cost line names — and
+  matches ids and aliases regardless of case, as the server does. A
+  vendor-prefixed id that is not an alias is still refused, but now says what it
+  most likely meant: ``Did you mean `gpt-5.5`?`` for `openai/gpt-5.5`. Only an
+  exact match on the bare id is offered; a prefix match would suggest
+  `gemini-2.5-flash` for `google/gemini-2.5-flash-lite`.
+
+- **An embedder is never offered as a chat model.** It is recognised by its type
+  even when the server labels its capability "generation", so it is never the
+  chat default, and every wrong-tool error now names the command that does run
+  the model: `curvet chat -m all-minilm-l6-v2` points at `curvet embed`, and
+  `curvet stt -m gpt-5.5` points at `curvet chat` where it used to suggest
+  `curvet audio`. `curvet init` leaves non-chat models out of the configs it
+  writes, and the cost line drops the `0 out` when nothing was generated.
+
+- **`curvet mcp` starts on either credential, and offers the agent.** It used to
+  require an app key and exit without one, which left everything that needs the
+  sign-in token unreachable over MCP. It now starts on whichever credential the
+  profile holds and offers what that credential can reach: 2 tools with only a
+  `curvet login` token, 10 with only an app key (naming `curvet login --scope
+  agency:run` for the rest), 12 with both — and says which on stderr.
+
+  New: `run_agent` and `get_agent_run`. A run returns its id at once and is
+  polled, as media jobs are. One that stops to ask a person ends there and says
+  to rerun it in `curvet agent`, since nobody is at a terminal on stdio. Files it
+  attaches pass the same path checks as the agent's, except that outside the
+  project is refused rather than confirmed.
+
+  `list_workflows`, `describe_workflow`, `run_workflow` and `get_workflow_run`
+  are now one `workflows` tool, and `get_balance` and `get_analytics` one
+  `account` tool. The tools are served from `@curvet/mcp`, the package the hosted
+  MCP server is built on, rather than from a local copy.
+
+- Requires `@curvet/sdk` 0.14.0 or newer for `embeddings.create()`.
+
 ## 0.14.0
 
 - **File access is on by default outside a project too.** It used to be on inside

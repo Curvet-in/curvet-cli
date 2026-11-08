@@ -55,6 +55,18 @@ describe("formatCost", () => {
     expect(line).toBe("— gpt-4o · 12 credits (metered) · 1.2k in / 340 out · 2.1s");
   });
 
+  // An embedding generates nothing, so "12 in / 0 out" would be noise.
+  it("prints input tokens alone when nothing was generated", () => {
+    const line = formatCost({
+      model: "all-minilm-l6-v2",
+      credits: 0.01,
+      billing: "metered",
+      tokensIn: 12,
+      latencyMs: 300,
+    });
+    expect(line).toBe("— all-minilm-l6-v2 · 0.01 credits (metered) · 12 in · 300ms");
+  });
+
   it("uses the singular for one credit and omits absent fields", () => {
     expect(formatCost({ model: "qwen-235b", credits: 1, billing: "flat" })).toContain("1 credit (flat)");
     expect(formatCost({ model: "qwen-235b" })).toBe("— qwen-235b");

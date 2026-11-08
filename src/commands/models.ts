@@ -81,10 +81,13 @@ export function modelRows(models: ModelInfo[], includeAll: boolean): {
 export function modelsCommand(): Command {
   return new Command("models")
     .description("List available models (works without a key via the public catalogue)")
-    .option("--type <type>", "filter by type: chat, image, video, audio, 3d, … (app-key mode)")
+    .option(
+      "--type <type>",
+      "filter by type: chat, image, video, audio, 3d, embedding, … (app-key mode)",
+    )
     .option(
       "--capability <cap>",
-      "filter by what the model does: generation or transcription (app-key mode)",
+      "filter by what the model does: generation, transcription or embedding (app-key mode)",
     )
     .option("--include <what>", "runnable (default) or all — all adds coming-soon models")
     .option("--cheapest", "sort by credit cost, cheapest first")

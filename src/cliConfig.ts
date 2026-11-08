@@ -42,6 +42,17 @@ export function acceptsImages(m: CliModel): boolean {
   return (m.architecture?.input_modalities || []).includes("image");
 }
 
+/**
+ * Whether a model chats. An embedder listed on `/v1/models` would be written
+ * into an editor as a chat model and 404 on the first message. A model that
+ * declares no output modality counts as chat, which is all the list held before
+ * any other kind could appear on it.
+ */
+export function isChatModel(m: CliModel): boolean {
+  const out = m.architecture?.output_modalities;
+  return !out || out.length === 0 || out.includes("text");
+}
+
 /** Placeholder used wherever we cannot (or should not) print a real key. */
 export const KEY_PLACEHOLDER = "YOUR_APP_KEY";
 

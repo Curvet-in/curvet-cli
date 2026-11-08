@@ -7,6 +7,7 @@ import { resolveProfile } from "../config.js";
 import { v1Root } from "../client.js";
 import { ok, printJson, table, warn } from "../output.js";
 import {
+  isChatModel,
   toAssistantPrompt,
   toClineFields,
   toCurlExample,
@@ -167,7 +168,9 @@ async function fetchCliModels(baseURL: string | undefined, appKey?: string): Pro
   });
   if (!res.ok) throw new Error(`Could not load the model catalogue (HTTP ${res.status}).`);
   const body = (await res.json()) as { data?: CliModel[] };
-  const models = Array.isArray(body.data) ? body.data : [];
+  // Every tool here is configured for chat; an embedder in its model list would
+  // 404 on the first message.
+  const models = (Array.isArray(body.data) ? body.data : []).filter(isChatModel);
   if (models.length === 0) throw new Error("The model catalogue came back empty.");
   return models;
 }

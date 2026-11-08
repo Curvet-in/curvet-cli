@@ -11,6 +11,12 @@ describe("resolveRoute", () => {
     expect(resolveRoute("GET", "/models")).toBe("/models");
   });
 
+  // RAG tools point the same OpenAI base URL at embeddings as at chat.
+  it("forwards embeddings, with or without the /v1 prefix", () => {
+    expect(resolveRoute("POST", "/v1/embeddings")).toBe("/embeddings");
+    expect(resolveRoute("POST", "/embeddings")).toBe("/embeddings");
+  });
+
   it("passes a model id through to the single-model route", () => {
     expect(resolveRoute("GET", "/v1/models/gpt-5.5")).toBe("/models/gpt-5.5");
   });
