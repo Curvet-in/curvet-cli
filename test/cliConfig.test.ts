@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   acceptsImages,
+  isChatModel,
   prettyName,
   toClineFields,
   toOpenCodeConfig,
@@ -126,6 +127,22 @@ describe("acceptsImages", () => {
   it("reads the input modalities", () => {
     expect(acceptsImages(GPT)).toBe(true);
     expect(acceptsImages(UNPRICED)).toBe(false);
+  });
+});
+
+describe("isChatModel", () => {
+  // An embedder written into an editor's config as a chat model 404s on the
+  // first message; a model that declares no outputs is the chat list as it
+  // has always been.
+  it("keeps chat models and drops embedders", () => {
+    const EMBEDDER: CliModel = {
+      id: "text-embedding-3-small",
+      architecture: { input_modalities: ["text"], output_modalities: ["embeddings"] },
+    };
+    expect([GPT, EMBEDDER, UNPRICED].filter(isChatModel).map((m) => m.id)).toEqual([
+      "gpt-5.5",
+      "mystery-1",
+    ]);
   });
 });
 

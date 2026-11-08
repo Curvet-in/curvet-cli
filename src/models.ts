@@ -31,34 +31,90 @@ export interface PickModelOptions {
   defaultModel?: string;
 }
 
-/** A model's capability, defaulting for deployments that don't send one. */
+/**
+ * A model's capability, defaulting for deployments that don't send one.
+ *
+ * An embedder is keyed on its type rather than trusted to carry the label: the
+ * server fills a missing capability in as "generation", so an embedder labelled
+ * that way would read as a generator and be offered to `curvet chat`.
+ */
 function capabilityOf(model: ModelInfo): ModelCapability {
+  if (model.type === "embedding") return "embedding";
   return model.capability ?? "generation";
 }
 
-const COMMAND_FOR: Record<string, string> = {
-  transcription: "curvet stt <file>",
-  generation: "curvet audio",
-};
+/**
+ * The catalogue entry a typed id names — its Curvet id, or one of the aliases
+ * the server publishes for it (`meta-llama/llama-3.3-70b-instruct` is
+ * `llama-3.3-70b`). Exact first, then trimmed and case-insensitive, the order
+ * the server resolves them in: an id before any alias. Never a prefix or fuzzy
+ * match, which would hand back a model nobody named.
+ */
+export function findModel(models: ModelInfo[], typed: string): ModelInfo | undefined {
+  const exact = models.find((m) => m.id === typed);
+  if (exact) return exact;
+  const key = typed.trim().toLowerCase();
+  if (!key) return undefined;
+  const aliasesOf = (m: ModelInfo): string[] =>
+    Array.isArray(m.aliases) ? m.aliases.filter((a): a is string => typeof a === "string") : [];
+  return (
+    models.find((m) => m.id.toLowerCase() === key) ??
+    models.find((m) => aliasesOf(m).some((a) => a.toLowerCase() === key))
+  );
+}
+
+/**
+ * An OpenRouter-style id without its vendor prefix and variant suffix:
+ * `openai/gpt-oss-120b` → `gpt-oss-120b`, `google/gemma-4-31b-it:free` →
+ * `gemma-4-31b-it`. Used to suggest an id only — never sent anywhere, because
+ * the same name does not always mean the same weights.
+ */
+export function bareId(typed: string): string {
+  return (typed.split("/").pop() ?? typed).replace(/:[\w-]+$/, "");
+}
+
+/** What a generator of each type produces, for reading in a sentence. */
+const OUTPUT_OF: Record<string, string> = { chat: "text", image: "images", "3d": "3D models" };
+
+/** The command that runs a model, for pointing at it from the wrong one. */
+function commandFor(model: ModelInfo): string | undefined {
+  const cap = capabilityOf(model);
+  if (cap === "transcription") return `curvet stt <file> -m ${model.id}`;
+  if (cap === "embedding") return `curvet embed -m ${model.id} "text"`;
+  return ["chat", "image", "video", "audio", "3d"].includes(model.type)
+    ? `curvet ${model.type} -m ${model.id}`
+    : undefined;
+}
+
+/** The listing that shows the models a command wants. */
+function listHint(wanted: ModelCapability, type: ModelType): string {
+  if (wanted === "embedding") return "curvet models --type embedding";
+  return type === "audio" ? `curvet models --capability ${wanted}` : `curvet models --type ${type}`;
+}
 
 /**
  * Explain a model that exists but is the wrong tool for this command. The
  * expensive version of this mistake is `curvet audio -m whisper-large-v3`:
  * Whisper is `type: "audio"` like every TTS model, so nothing about the id says
  * it transcribes rather than speaks, and without this check the CLI submits the
- * job and only fails once the request has been made.
+ * job and only fails once the request has been made. An embedder handed to
+ * `curvet chat`, or a chat model handed to `curvet embed`, is the same mistake.
  */
-function wrongCapability(model: ModelInfo, wanted: ModelCapability): string {
+function wrongCapability(model: ModelInfo, wanted: ModelCapability, type: ModelType): string {
   const has = capabilityOf(model);
   const what =
     has === "transcription"
       ? `${model.id} is a speech-to-text model — it transcribes audio rather than generating it.`
-      : `${model.id} generates ${model.type}; it cannot transcribe.`;
-  const instead = COMMAND_FOR[has];
+      : has === "embedding"
+        ? `${model.id} is an embedding model — it turns text into vectors rather than generating anything.`
+        : `${model.id} generates ${OUTPUT_OF[model.type] ?? model.type}; it cannot ${
+            wanted === "embedding" ? "embed text" : "transcribe"
+          }.`;
+  const instead = commandFor(model);
   return [
     what,
-    instead ? `Use \`${instead} -m ${model.id}\` instead.` : "",
-    `List the right ones with \`curvet models --capability ${wanted}\`.`,
+    instead ? `Use \`${instead}\` instead.` : "",
+    `List the right ones with \`${listHint(wanted, type)}\`.`,
   ]
     .filter(Boolean)
     .join("\n  ");
@@ -66,20 +122,29 @@ function wrongCapability(model: ModelInfo, wanted: ModelCapability): string {
 
 /** Explain a model the runnable catalogue does not contain. */
 function unusable(id: string, type: ModelType, full: ModelInfo[]): string {
-  const known = full.find((m) => m.id === id);
+  const known = findModel(full, id);
   if (!known) {
+    // `openai/gpt-5.5` is the OpenRouter spelling of an id we do serve. Only an
+    // exact match on the bare id is offered: a prefix match would suggest
+    // gemini-2.5-flash for google/gemini-2.5-flash-lite.
+    const bare = bareId(id).trim().toLowerCase();
+    const near = bare ? full.find((m) => m.id.toLowerCase() === bare) : undefined;
     return [
       `"${id}" is not in this app's model catalogue.`,
+      near ? `Did you mean \`${near.id}\`? Curvet ids carry no vendor prefix or :variant suffix.` : "",
       `See everything the key can reach with \`curvet models --include all\`.`,
-    ].join("\n  ");
+    ]
+      .filter(Boolean)
+      .join("\n  ");
   }
+  // Named by its Curvet id: when an alias was typed, that is the one to look up.
   if (known.comingSoon) {
-    return `${id} is announced but not callable yet. \`curvet models --type ${type}\` lists what runs today.`;
+    return `${known.id} is announced but not callable yet. \`curvet models --type ${type}\` lists what runs today.`;
   }
   if (known.surface && known.surface !== "api") {
-    return `${id} only runs in the Curvet dashboard — there is no API route for it.`;
+    return `${known.id} only runs in the Curvet dashboard — there is no API route for it.`;
   }
-  return `${id} is currently unavailable. \`curvet models --type ${type}\` lists what runs today.`;
+  return `${known.id} is currently unavailable. \`curvet models --type ${type}\` lists what runs today.`;
 }
 
 /**
@@ -123,18 +188,24 @@ export async function pickModelInfo(
       (m) => capabilityOf(m) === capability,
     );
     if (models.length === 0) {
+      // "No embedding models with embedding support" says the same thing twice.
+      const which = capability === type ? `${type} models` : `${type} models with ${capability} support`;
       throw new Error(
-        `No ${type} models with ${capability} support are available to this app — ` +
+        `No ${which} are available to this app — ` +
           "pass --model explicitly, or check `curvet models`.",
       );
     }
     return models[0];
   }
 
+  // An alias resolves to its catalogue entry, so the canonical id is what gets
+  // sent and what the cost line names.
   const runnable = await catalogue.runnable();
-  const model = runnable.find((m) => m.id === flag);
+  const model = findModel(runnable, flag);
   if (!model) throw new Error(unusable(flag, type, await catalogue.all()));
-  if (capabilityOf(model) !== capability) throw new Error(wrongCapability(model, capability));
+  if (capabilityOf(model) !== capability) {
+    throw new Error(wrongCapability(model, capability, type));
+  }
   if (model.type !== type) {
     throw new Error(
       `${flag} is a ${model.type} model, so it cannot be used here. ` +

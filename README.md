@@ -40,6 +40,7 @@ switch between accounts or environments.
 | `curvet image "prompt" -o pic.png` | Generate an image; prints the URL when `-o` is omitted |
 | `curvet video\|audio\|3d "prompt"` | Async generation with a progress bar; `--no-wait` prints the job id |
 | `curvet stt clip.mp3` | Transcribe audio; prints the text, `-o` writes it to a file |
+| `curvet embed "text"` | Embedding vectors: prints each vector's length; `--lines` embeds one input per line, `--json` prints the vectors |
 | `curvet jobs get\|wait <jobId>` | Inspect or poll an async job; `wait -o file` downloads the result |
 | `curvet workflows list` | The workflows this key can run; `-q` search, `-n` limit |
 | `curvet workflows show <id>` | One workflow and the inputs it accepts, with a ready-to-run command |
@@ -76,7 +77,8 @@ whisper-large-v3      audio  transcription  deepinfra   1
 
 Filter by it with `--capability generation` or `--capability transcription`, and
 see what's coming with `--include all`, which adds a STATUS column marking
-coming-soon and dashboard-only models.
+coming-soon and dashboard-only models. `--type embedding` lists the embedding
+models, which run on [`curvet embed`](#embeddings).
 
 Naming the wrong one is caught before the request is made, rather than after you
 have paid for it:
@@ -86,6 +88,20 @@ $ curvet audio -m whisper-large-v3 "hello there"
 ✘ whisper-large-v3 is a speech-to-text model — it transcribes audio rather than generating it.
   Use `curvet stt <file> -m whisper-large-v3` instead.
   List the right ones with `curvet models --capability generation`.
+```
+
+`-m` takes a model's Curvet id, or an OpenRouter-style alias the server publishes
+for that same model: `-m meta-llama/llama-3.3-70b-instruct` runs `llama-3.3-70b`,
+and the cost line names `llama-3.3-70b`. A `:free` alias runs, and bills, as the
+paid model, and `deepseek/deepseek-chat` runs Curvet's `deepseek-chat`, which is
+DeepSeek-V4-Flash. Any other vendor-prefixed id is refused before the request,
+with the Curvet id when that is the only difference:
+
+```console
+$ curvet chat -m openai/gpt-5.5 "hi"
+✘ "openai/gpt-5.5" is not in this app's model catalogue.
+  Did you mean `gpt-5.5`? Curvet ids carry no vendor prefix or :variant suffix.
+  See everything the key can reach with `curvet models --include all`.
 ```
 
 ### Speech to text
@@ -107,6 +123,35 @@ $ curvet stt clip.mp3 -m whisper-large-v3 --allow-fallback
 The quick brown fox jumps over the lazy dog.
 — whisper-large-v3 · 1 credit · 2522.32 left
 ```
+
+### Embeddings
+
+```bash
+curvet embed "the quick brown fox"                           # the first embedding model
+curvet embed -m text-embedding-3-small "the quick brown fox"
+cat queries.txt | curvet embed --lines -m all-minilm-l6-v2   # one vector per line
+curvet embed "hello" --json | jq '.data[0].embedding | length'
+```
+
+Each vector prints as its length and first few components — enough to see it is
+real. `--json` prints the whole response, vectors included, as one line.
+
+```console
+$ curvet embed -m all-minilm-l6-v2 "the quick brown fox"
+384 dims  [0.0123, -0.0456, 0.0789, 0.0012, …]
+— all-minilm-l6-v2 · 0.01 credits (metered) · 6 in · 412ms
+```
+
+| Model | Dimensions | Max input per text | Also accepted as |
+|---|---|---|---|
+| `text-embedding-3-small` | 1536 | 8191 tokens | `openai/text-embedding-3-small` |
+| `all-minilm-l6-v2` | 384 | 512 tokens | `sentence-transformers/all-minilm-l6-v2` |
+
+`curvet models --type embedding` lists the ones your key can call. `--lines`
+sends every line in one request, up to 2,048 of them; a text over the model's
+limit is refused, never truncated. An embedder passed to `curvet chat`, or a chat
+model passed to `curvet embed`, is refused before the request is made, with the
+command that does run it.
 
 ## Interactive chat
 
@@ -482,9 +527,9 @@ export OPENAI_API_KEY=unused
 client = OpenAI(base_url="http://127.0.0.1:4141/v1", api_key="unused")
 ```
 
-Serves `/chat/completions` and `/models`, with or without the `/v1` prefix,
-since tools disagree about whether they append it. Streaming is piped through
-untouched, so tokens arrive as they're generated. The client's own
+Serves `/chat/completions`, `/embeddings` and `/models`, with or without the
+`/v1` prefix, since tools disagree about whether they append it. Streaming is
+piped through untouched, so tokens arrive as they're generated. The client's own
 `Authorization` header is dropped and replaced with yours.
 
 It binds to **loopback only**. `--host` widens that and says so loudly — every

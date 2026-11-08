@@ -13,6 +13,7 @@ import { ok, warn } from "../output.js";
  */
 const ROUTES: Array<{ method: string; match: RegExp; to: string }> = [
   { method: "POST", match: /^\/(v1\/)?chat\/completions$/, to: "/chat/completions" },
+  { method: "POST", match: /^\/(v1\/)?embeddings$/, to: "/embeddings" },
   { method: "GET", match: /^\/(v1\/)?models$/, to: "/models" },
   // A model id is one segment: `(.+)` would accept `/models/../../secret`,
   // which fetch normalises into a path outside the API surface — reachable with
@@ -96,7 +97,7 @@ export function proxyCommand(): Command {
         if (!target) {
           return sendJson(res, 404, {
             error: {
-              message: `No route for ${req.method} ${pathname}. This proxy serves /v1/chat/completions and /v1/models.`,
+              message: `No route for ${req.method} ${pathname}. This proxy serves /v1/chat/completions, /v1/embeddings and /v1/models.`,
               type: "invalid_request_error",
             },
           });

@@ -91,7 +91,9 @@ export function formatCost(info: CostInfo): string {
     parts.push(info.billing ? `${credits} ${unit} (${info.billing})` : `${credits} ${unit}`);
   }
   if (info.tokensIn != null || info.tokensOut != null) {
-    parts.push(`${compactTokens(info.tokensIn ?? 0)} in / ${compactTokens(info.tokensOut ?? 0)} out`);
+    // An embedding generates nothing, so "12 in / 0 out" would be noise.
+    const tin = compactTokens(info.tokensIn ?? 0);
+    parts.push(info.tokensOut == null ? `${tin} in` : `${tin} in / ${compactTokens(info.tokensOut)} out`);
   }
   if (info.remainingBalance != null) parts.push(`${trimNumber(info.remainingBalance)} left`);
   if (info.latencyMs != null) parts.push(compactDuration(info.latencyMs));
